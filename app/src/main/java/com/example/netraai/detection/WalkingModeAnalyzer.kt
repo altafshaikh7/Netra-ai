@@ -19,6 +19,7 @@ class WalkingModeAnalyzer(
     val temporalTracker: TemporalTracker = TemporalTracker(),
     val targetFps: Int = DEFAULT_TARGET_FPS,
     private val onLumaSampled: ((Float) -> Unit)? = null,
+    private val onBitmapCaptured: ((android.graphics.Bitmap) -> Unit)? = null,
     private val onAnalysisComplete: (
         confirmed: List<DetectedObstacle>,
         rawAccepted: List<DetectedObstacle>,
