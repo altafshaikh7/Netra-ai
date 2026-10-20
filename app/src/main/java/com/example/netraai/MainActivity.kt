@@ -1,8 +1,11 @@
 package com.example.netraai
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -40,17 +43,55 @@ import com.example.netraai.voice.TtsManager
 
 class MainActivity : ComponentActivity() {
     private lateinit var ttsManager: TtsManager
+    private var hasPermissions by mutableStateOf(false)
+    private var isPermanentlyDenied by mutableStateOf(false)
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        val cameraGranted = permissions[Manifest.permission.CAMERA] ?: false
-        val audioGranted = permissions[Manifest.permission.RECORD_AUDIO] ?: false
-        if (cameraGranted && audioGranted) {
-            ttsManager.speak("Camera and audio permissions granted.")
+    ) { _ ->
+        checkPermissions()
+        if (hasPermissions) {
+            ttsManager.speak("Permissions granted.")
         } else {
-            ttsManager.speak("Permissions are required for Netra to assist you.")
+            val cameraDeniedPermanent = !shouldShowRequestPermissionRationale(Manifest.permission.CAMERA) &&
+                    ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED
+            val audioDeniedPermanent = !shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO) &&
+                    ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED
+
+            if (cameraDeniedPermanent || audioDeniedPermanent) {
+                isPermanentlyDenied = true
+                ttsManager.speak("Permissions permanently denied. Please tap Open Settings to enable camera and microphone.")
+            } else {
+                isPermanentlyDenied = false
+                ttsManager.speak("Camera and microphone permissions are required for Netra to assist you.")
+            }
         }
+    }
+
+    private fun checkPermissions() {
+        val cameraGranted = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+
+        val audioGranted = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+
+        hasPermissions = cameraGranted && audioGranted
+        if (hasPermissions) {
+            isPermanentlyDenied = false
+        }
+    }
+
+    private fun openAppSettings() {
+        ttsManager.speak("Opening app settings.")
+        val intent = Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.fromParts("package", packageName, null)
+        )
+        startActivity(intent)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -58,24 +99,14 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         ttsManager = TtsManager(this)
 
-        // First launch spoken greeting and limitation note
+        checkPermissions()
+
+        // Spoken greeting and limitation note
         ttsManager.speak("Netra ready. Note: this app assists but does not replace a white cane or guide.")
 
         setContent {
             NetraAITheme {
                 var currentLanguage by remember { mutableStateOf("en") }
-                var hasPermissions by remember {
-                    mutableStateOf(
-                        ContextCompat.checkSelfPermission(
-                            this,
-                            Manifest.permission.CAMERA
-                        ) == PackageManager.PERMISSION_GRANTED &&
-                                ContextCompat.checkSelfPermission(
-                                    this,
-                                    Manifest.permission.RECORD_AUDIO
-                                ) == PackageManager.PERMISSION_GRANTED
-                    )
-                }
 
                 Surface(
                     modifier = Modifier.fillMaxSize(),
@@ -143,40 +174,63 @@ class MainActivity : ComponentActivity() {
                                     horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
                                     Text(
-                                        text = "Camera and microphone permissions are required for live detection and voice commands.",
+                                        text = if (isPermanentlyDenied) {
+                                            "Camera and microphone permissions were denied. Please open settings to grant them."
+                                        } else {
+                                            "Camera and microphone permissions are required for live detection and voice commands."
+                                        },
                                         color = Color.White,
                                         fontSize = 20.sp,
                                         modifier = Modifier.padding(bottom = 16.dp)
                                     )
 
-                                    Button(
-                                        onClick = {
-                                            ttsManager.speak("Requesting camera and audio permissions.")
-                                            requestPermissionLauncher.launch(
-                                                arrayOf(
-                                                    Manifest.permission.CAMERA,
-                                                    Manifest.permission.RECORD_AUDIO,
-                                                    Manifest.permission.ACCESS_FINE_LOCATION
-                                                )
+                                    if (isPermanentlyDenied) {
+                                        Button(
+                                            onClick = { openAppSettings() },
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(72.dp)
+                                                .semantics {
+                                                    contentDescription = "Open App Settings button"
+                                                },
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
+                                        ) {
+                                            Text(
+                                                text = "Open Settings",
+                                                color = Color.White,
+                                                fontSize = 22.sp
                                             )
-                                        },
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(72.dp)
-                                            .semantics {
-                                                contentDescription = "Grant camera and audio permissions button"
+                                        }
+                                    } else {
+                                        Button(
+                                            onClick = {
+                                                ttsManager.speak("Requesting camera and audio permissions.")
+                                                requestPermissionLauncher.launch(
+                                                    arrayOf(
+                                                        Manifest.permission.CAMERA,
+                                                        Manifest.permission.RECORD_AUDIO,
+                                                        Manifest.permission.ACCESS_FINE_LOCATION
+                                                    )
+                                                )
                                             },
-                                        colors = ButtonDefaults.buttonColors(containerColor = Color.Green)
-                                    ) {
-                                        Text(
-                                            text = "Grant Permissions",
-                                            color = Color.Black,
-                                            fontSize = 22.sp
-                                        )
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(72.dp)
+                                                .semantics {
+                                                    contentDescription = "Grant camera and audio permissions button"
+                                                },
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color.Green)
+                                        ) {
+                                            Text(
+                                                text = "Grant Permissions",
+                                                color = Color.Black,
+                                                fontSize = 22.sp
+                                            )
+                                        }
                                     }
                                 }
                             } else {
-                                // Status or quick action indicator
+                                // Status indicator when active
                                 Box(
                                     modifier = Modifier
                                         .padding(bottom = 32.dp)
@@ -198,6 +252,15 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val previousState = hasPermissions
+        checkPermissions()
+        if (!previousState && hasPermissions) {
+            ttsManager.speak("Permissions granted.")
         }
     }
 
