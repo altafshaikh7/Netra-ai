@@ -12,6 +12,7 @@ object BlurGate {
 
     /**
      * Calculates the variance of Laplacian on the Y plane of an [ImageProxy].
+     * Uses adjacent pixels (offset of 1 pixel) on a downscaled sample grid.
      * Higher score = sharper image. Lower score = blurry image.
      */
     fun calculateSharpness(imageProxy: ImageProxy, step: Int = 8): Float {
@@ -29,20 +30,20 @@ object BlurGate {
         var sqSum = 0.0
         var count = 0
 
-        // 3x3 Laplacian kernel approximation:
+        // 3x3 Laplacian kernel approximation using adjacent pixels (1 pixel offset):
         // L(x,y) = I(x+1,y) + I(x-1,y) + I(x,y+1) + I(x,y-1) - 4*I(x,y)
-        for (row in step until height - step step step) {
+        for (row in 1 until height - 1 step step) {
             val rowOffset = row * rowStride
-            val rowAboveOffset = (row - step) * rowStride
-            val rowBelowOffset = (row + step) * rowStride
+            val rowAboveOffset = (row - 1) * rowStride
+            val rowBelowOffset = (row + 1) * rowStride
 
-            for (col in step until width - step step step) {
+            for (col in 1 until width - 1 step step) {
                 val idx = rowOffset + col * pixelStride
                 if (idx + pixelStride >= buffer.limit()) continue
 
                 val center = buffer.get(idx).toInt() and 0xFF
-                val left = buffer.get(rowOffset + (col - step) * pixelStride).toInt() and 0xFF
-                val right = buffer.get(rowOffset + (col + step) * pixelStride).toInt() and 0xFF
+                val left = buffer.get(rowOffset + (col - 1) * pixelStride).toInt() and 0xFF
+                val right = buffer.get(rowOffset + (col + 1) * pixelStride).toInt() and 0xFF
                 val top = buffer.get(rowAboveOffset + col * pixelStride).toInt() and 0xFF
                 val bottom = buffer.get(rowBelowOffset + col * pixelStride).toInt() and 0xFF
 

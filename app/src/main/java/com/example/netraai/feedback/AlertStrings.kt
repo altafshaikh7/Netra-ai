@@ -84,7 +84,7 @@ object AlertStrings {
         val isHindi = language.equals("hi", ignoreCase = true)
         return when (distance) {
             Distance.VERY_CLOSE -> if (isHindi) "बहुत पास" else "very close"
-            Distance.NEAR -> if (isHindi) "पास" else "near"
+            Distance.NEAR -> if (isHindi) "पास" else "nearby"
             Distance.FAR -> if (isHindi) "दूर" else "far"
         }
     }

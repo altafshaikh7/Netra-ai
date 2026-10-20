@@ -117,6 +117,9 @@ class MainActivity : ComponentActivity() {
     private var hasFlashUnit: Boolean = false
     private var hasWarnedNoFlash: Boolean = false
 
+    @Volatile
+    private var currentFlashlightMode: FlashlightMode = FlashlightMode.AUTO
+
     private var hasPermissions by mutableStateOf(false)
     private var isPermanentlyDenied by mutableStateOf(false)
     private var isWalkingModeActive by mutableStateOf(false)
@@ -234,21 +237,12 @@ class MainActivity : ComponentActivity() {
         walkingModeAnalyzer = WalkingModeAnalyzer(
             detectorHelper = detectorHelper,
             onLumaSampled = { luma ->
-                lifecycleScope.launch {
-                    val currentMode = preferencesManager.flashlightModeFlow
-                    if (isWalkingModeActive) {
-                        launch {
-                            currentMode.collect { mode ->
-                                if (mode == FlashlightMode.AUTO) {
-                                    val stateChange = flashlightController.evaluate(luma)
-                                    if (stateChange == true) {
-                                        applyFlashlightState(true, speakAnnouncement = true, reason = "Low light, flashlight on")
-                                    } else if (stateChange == false) {
-                                        applyFlashlightState(false, speakAnnouncement = true, reason = "Flashlight off")
-                                    }
-                                }
-                            }
-                        }
+                if (isWalkingModeActive && currentFlashlightMode == FlashlightMode.AUTO) {
+                    val stateChange = flashlightController.evaluate(luma)
+                    if (stateChange == true) {
+                        applyFlashlightState(true, speakAnnouncement = true, reason = "Low light, flashlight on")
+                    } else if (stateChange == false) {
+                        applyFlashlightState(false, speakAnnouncement = true, reason = "Flashlight off")
                     }
                 }
             },
@@ -283,6 +277,12 @@ class MainActivity : ComponentActivity() {
         }
 
         checkPermissions()
+
+        lifecycleScope.launch {
+            preferencesManager.flashlightModeFlow.collect { mode ->
+                currentFlashlightMode = mode
+            }
+        }
 
         lifecycleScope.launch {
             preferencesManager.languageFlow.collect { lang ->
@@ -419,7 +419,7 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
 
-                            // STEP 3 Item 5: "Hold steady" indicator badge when detection is paused due to motion or blur
+                            // "Hold steady" indicator badge when detection is paused due to motion or blur
                             if (isWalkingModeActive && debugGateStatus.isPaused) {
                                 Card(
                                     modifier = Modifier
@@ -757,7 +757,7 @@ private fun DisclaimerCard(
                 modifier = Modifier
                     .size(40.dp)
                     .semantics {
-                        contentDescription = if (isHindi) "सूचना हटाएं" else "Dismiss notice"
+                        contentDescription = if (isHindi) "सूचनाएं हटाएं" else "Dismiss notice"
                     }
             ) {
                 Icon(
@@ -864,7 +864,6 @@ private fun BottomControlDock(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // 1. Primary Action Button: Large Walking Mode (Min 88dp height) with long-press debug capture
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -895,7 +894,6 @@ private fun BottomControlDock(
                 )
             }
 
-            // 2. Secondary 72dp Controls Row with Material Icons
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)

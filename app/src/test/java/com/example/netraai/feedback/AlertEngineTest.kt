@@ -62,7 +62,7 @@ class AlertEngineTest {
         val spoken = alertEngine.processObstacles(listOf(person), language = "en")
 
         assertNotNull(spoken)
-        assertEquals("Person left, near.", spokenText)
+        assertEquals("Person left, nearby.", spokenText)
         assertEquals(false, wasInterrupted)
     }
 
