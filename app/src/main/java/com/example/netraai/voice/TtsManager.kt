@@ -59,6 +59,9 @@ class TtsManager(context: Context) {
         tts?.language = currentLocale
     }
 
+    val isSpeaking: Boolean
+        get() = tts?.isSpeaking == true
+
     fun setSpeechRate(rate: Float) {
         tts?.setSpeechRate(rate)
     }
