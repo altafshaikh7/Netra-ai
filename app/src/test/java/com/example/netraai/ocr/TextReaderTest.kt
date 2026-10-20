@@ -1,6 +1,7 @@
 package com.example.netraai.ocr
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TextReaderTest {
@@ -8,6 +9,7 @@ class TextReaderTest {
     @Test
     fun testEmptyInput() {
         assertEquals("", TextReader.formatRecognizedText(emptyList()))
+        assertEquals(0, TextReader.splitTextIntoChunks("").size)
     }
 
     @Test
@@ -48,5 +50,26 @@ class TextReaderTest {
         )
         val result = TextReader.formatRecognizedText(lines)
         assertEquals("Extra Spaces", result)
+    }
+
+    @Test
+    fun testSplitTextIntoChunksDelimitersAndNewlines() {
+        val text = "First sentence! Second sentence? Third sentence।\nFourth sentence."
+        val chunks = TextReader.splitTextIntoChunks(text, maxChunkLength = 200)
+        assertEquals(4, chunks.size)
+        assertEquals("First sentence!", chunks[0])
+        assertEquals("Second sentence?", chunks[1])
+        assertEquals("Third sentence।", chunks[2])
+        assertEquals("Fourth sentence.", chunks[3])
+    }
+
+    @Test
+    fun testSplitLongChunkAtNearestSpace() {
+        val longWordOrSentence = "Thisisaverylongsentencethatneedstobesplitbecauseitexceedsthemaximumchunklengthlimitofonehundredcharactersveryeasilywithoutanyspacesinbetweensomewhere."
+        val chunks = TextReader.splitTextIntoChunks(longWordOrSentence, maxChunkLength = 50)
+        assertTrue(chunks.size > 1)
+        for (chunk in chunks) {
+            assertTrue(chunk.length <= 50)
+        }
     }
 }

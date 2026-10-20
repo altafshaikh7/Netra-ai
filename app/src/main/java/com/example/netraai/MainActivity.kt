@@ -29,6 +29,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -311,19 +312,20 @@ class MainActivity : ComponentActivity() {
                                 ttsManager.setLanguage("en")
                             }
 
-                            val sentences = recognizedText.split(Regex("(?<=[.!?])\\s+")).filter { it.isNotBlank() }
-                            for (i in sentences.indices) {
-                                val sentence = sentences[i].trim()
-                                val isLast = (i == sentences.size - 1)
+                            val maxLength = ttsManager.maxSpeechInputLength.coerceAtMost(200)
+                            val chunks = TextReader.splitTextIntoChunks(recognizedText, maxChunkLength = maxLength)
+                            for (i in chunks.indices) {
+                                val chunk = chunks[i].trim()
+                                val isLast = (i == chunks.size - 1)
                                 if (isLast) {
-                                    ttsManager.speak(sentence, interrupt = (i == 0), utteranceId = "last_utterance", onDone = {
+                                    ttsManager.speak(chunk, interrupt = (i == 0), utteranceId = "last_utterance", onDone = {
                                         runOnUiThread {
                                             ttsManager.setLanguage(currentLanguage)
                                             isReadingActive = false
                                         }
                                     })
                                 } else {
-                                    ttsManager.speak(sentence, interrupt = (i == 0), utteranceId = "chunk_$i")
+                                    ttsManager.speak(chunk, interrupt = (i == 0), utteranceId = "chunk_$i")
                                 }
                             }
                         }
@@ -890,7 +892,11 @@ private fun PermissionRequestCard(
                     .fillMaxWidth()
                     .height(72.dp)
                     .semantics {
-                        contentDescription = if (isPermanentlyDenied) "Open Settings button" else "Grant Permissions button"
+                        contentDescription = if (isPermanentlyDenied) {
+                            if (isHindi) "सेटिंग्स खोलें" else "Open Settings button"
+                        } else {
+                            if (isHindi) "अनुमति दें" else "Grant Permissions button"
+                        }
                     },
                 colors = ButtonDefaults.buttonColors(
                     containerColor = if (isPermanentlyDenied) DangerRed else ElectricCyan
@@ -965,7 +971,7 @@ private fun BottomControlDock(
                     )
                     .semantics {
                         contentDescription = if (isWalkingModeActive) {
-                            if (isHindi) "वॉकिंग मोड बंद करें। सक्रिय है। लॉन्ग प्रेस से इमेज सेव करें।" else "Stop Walking Mode button. Active. Long press to save debug frame."
+                            if (isHindi) "वॉकिंग मोड बंद करें। सक्रिय है।" else "Stop Walking Mode button. Active."
                         } else {
                             if (isHindi) "वॉकिंग मोड शुरू करें।" else "Start Walking Mode button."
                         }
@@ -984,12 +990,14 @@ private fun BottomControlDock(
                 )
             }
 
+            // Row with 5 small buttons, each having contentPadding = PaddingValues(0.dp) and maxLines = 1
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Button(
                     onClick = onCycleFlashlight,
+                    contentPadding = PaddingValues(0.dp),
                     modifier = Modifier
                         .weight(1f)
                         .height(72.dp)
@@ -1018,13 +1026,15 @@ private fun BottomControlDock(
                             text = flashlightMode.name,
                             color = TextPrimary,
                             fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
                         )
                     }
                 }
 
                 Button(
                     onClick = onToggleLanguage,
+                    contentPadding = PaddingValues(0.dp),
                     modifier = Modifier
                         .weight(1f)
                         .height(72.dp)
@@ -1049,13 +1059,15 @@ private fun BottomControlDock(
                             text = if (isHindi) "हिंदी" else "EN",
                             color = TextPrimary,
                             fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
                         )
                     }
                 }
 
                 Button(
                     onClick = onReadTextClicked,
+                    contentPadding = PaddingValues(0.dp),
                     modifier = Modifier
                         .weight(1f)
                         .height(72.dp)
@@ -1084,13 +1096,15 @@ private fun BottomControlDock(
                             text = if (isReadingActive) (if (isHindi) "रोकें" else "Stop") else (if (isHindi) "पढ़ें" else "Read"),
                             color = TextPrimary,
                             fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
                         )
                     }
                 }
 
                 Button(
                     onClick = onSosClicked,
+                    contentPadding = PaddingValues(0.dp),
                     modifier = Modifier
                         .weight(1f)
                         .height(72.dp)
@@ -1115,13 +1129,15 @@ private fun BottomControlDock(
                             text = "SOS",
                             color = DangerRed,
                             fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
                         )
                     }
                 }
 
                 Button(
                     onClick = onOpenSettings,
+                    contentPadding = PaddingValues(0.dp),
                     modifier = Modifier
                         .weight(1f)
                         .height(72.dp)
@@ -1146,7 +1162,8 @@ private fun BottomControlDock(
                             text = "SET",
                             color = TextPrimary,
                             fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
                         )
                     }
                 }

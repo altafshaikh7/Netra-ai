@@ -128,5 +128,64 @@ class TextReader {
 
             return orderedTextBuilder.toString().replace(Regex("\\s+"), " ").trim()
         }
+
+        /**
+         * Splits recognized text into chunks using a simple character loop ending after . ! ? । or \n,
+         * ensuring no chunk exceeds maxChunkLength (default 200).
+         */
+        fun splitTextIntoChunks(text: String, maxChunkLength: Int = 200): List<String> {
+            if (text.isBlank()) return emptyList()
+            val resultChunks = mutableListOf<String>()
+            val currentChunk = StringBuilder()
+            val delimiters = setOf('.', '!', '?', '।', '\n')
+
+            for (i in text.indices) {
+                val ch = text[i]
+                currentChunk.append(ch)
+                if (ch in delimiters || currentChunk.length >= maxChunkLength) {
+                    val chunkStr = currentChunk.toString().trim()
+                    if (chunkStr.isNotEmpty()) {
+                        if (chunkStr.length <= maxChunkLength) {
+                            resultChunks.add(chunkStr)
+                        } else {
+                            var remaining = chunkStr
+                            while (remaining.length > maxChunkLength) {
+                                var splitIdx = remaining.lastIndexOf(' ', maxChunkLength)
+                                if (splitIdx == -1 || splitIdx < maxChunkLength / 2) {
+                                    splitIdx = maxChunkLength
+                                }
+                                resultChunks.add(remaining.substring(0, splitIdx).trim())
+                                remaining = remaining.substring(splitIdx).trim()
+                            }
+                            if (remaining.isNotEmpty()) {
+                                resultChunks.add(remaining)
+                            }
+                        }
+                    }
+                    currentChunk.clear()
+                }
+            }
+
+            val leftover = currentChunk.toString().trim()
+            if (leftover.isNotEmpty()) {
+                if (leftover.length <= maxChunkLength) {
+                    resultChunks.add(leftover)
+                } else {
+                    var remaining = leftover
+                    while (remaining.length > maxChunkLength) {
+                        var splitIdx = remaining.lastIndexOf(' ', maxChunkLength)
+                        if (splitIdx == -1 || splitIdx < maxChunkLength / 2) {
+                            splitIdx = maxChunkLength
+                        }
+                        resultChunks.add(remaining.substring(0, splitIdx).trim())
+                        remaining = remaining.substring(splitIdx).trim()
+                    }
+                    if (remaining.isNotEmpty()) {
+                        resultChunks.add(remaining)
+                    }
+                }
+            }
+            return resultChunks
+        }
     }
 }

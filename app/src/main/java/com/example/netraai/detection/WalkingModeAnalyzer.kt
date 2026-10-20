@@ -69,11 +69,14 @@ class WalkingModeAnalyzer(
 
     override fun analyze(imageProxy: ImageProxy) {
         try {
+            // Report analyzer resolution (Instruction 4)
+            Log.i(TAG, "ImageAnalysis analyzer resolution: ${imageProxy.width}x${imageProxy.height}")
+
             // 1. Sample luma regardless of walking mode (for auto flashlight)
             val luma = estimateAverageLuma(imageProxy, sampleStep = LUMA_SAMPLE_STEP)
             onLumaSampled?.invoke(luma)
 
-            // STEP 3 Item 2: OCR request handling (works even when walking mode is off)
+            // OCR request handling (works even when walking mode is off)
             if (readTextRequested) {
                 readTextRequested = false
                 val bitmap = imageProxy.toBitmap()

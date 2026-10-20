@@ -29,6 +29,12 @@ class TtsManager(context: Context) {
                             onLastUtteranceDone = null
                         }
                     }
+                    override fun onStop(utteranceId: String?, interrupted: Boolean) {
+                        if (utteranceId == "last_utterance") {
+                            onLastUtteranceDone?.invoke()
+                            onLastUtteranceDone = null
+                        }
+                    }
                     @Deprecated("Deprecated in Java")
                     override fun onError(utteranceId: String?) {
                         if (utteranceId == "last_utterance") {
@@ -78,6 +84,7 @@ class TtsManager(context: Context) {
         synchronized(pendingUtterances) {
             pendingUtterances.clear()
         }
+        onLastUtteranceDone?.invoke()
         onLastUtteranceDone = null
     }
 
@@ -91,6 +98,9 @@ class TtsManager(context: Context) {
 
     val isSpeaking: Boolean
         get() = tts?.isSpeaking == true
+
+    val maxSpeechInputLength: Int
+        get() = TextToSpeech.getMaxSpeechInputLength()
 
     fun setSpeechRate(rate: Float) {
         tts?.setSpeechRate(rate)
