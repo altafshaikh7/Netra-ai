@@ -2,6 +2,7 @@ package com.example.netraai.voice
 
 import android.content.Context
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import java.util.Locale
 
@@ -10,6 +11,7 @@ class TtsManager(context: Context) {
     private var isInitialized = false
     private var currentLocale: Locale = Locale.forLanguageTag("en-IN")
     private val pendingUtterances = mutableListOf<String>()
+    private var onLastUtteranceDone: (() -> Unit)? = null
 
     init {
         tts = TextToSpeech(context.applicationContext) { status ->
@@ -19,6 +21,22 @@ class TtsManager(context: Context) {
                     Log.e("TtsManager", "Language $currentLocale not supported, defaulting to US")
                     tts?.language = Locale.US
                 }
+                tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                    override fun onStart(utteranceId: String?) {}
+                    override fun onDone(utteranceId: String?) {
+                        if (utteranceId == "last_utterance") {
+                            onLastUtteranceDone?.invoke()
+                            onLastUtteranceDone = null
+                        }
+                    }
+                    @Deprecated("Deprecated in Java")
+                    override fun onError(utteranceId: String?) {
+                        if (utteranceId == "last_utterance") {
+                            onLastUtteranceDone?.invoke()
+                            onLastUtteranceDone = null
+                        }
+                    }
+                })
                 isInitialized = synchronized(this) {
                     true
                 }
@@ -34,7 +52,7 @@ class TtsManager(context: Context) {
         }
     }
 
-    fun speak(text: String, interrupt: Boolean = false) {
+    fun speak(text: String, interrupt: Boolean = false, utteranceId: String? = null, onDone: (() -> Unit)? = null) {
         synchronized(this) {
             if (!isInitialized) {
                 synchronized(pendingUtterances) {
@@ -43,12 +61,24 @@ class TtsManager(context: Context) {
                 return
             }
         }
-        speakInternal(text, interrupt)
+        if (onDone != null) {
+            onLastUtteranceDone = onDone
+        }
+        val queueMode = if (interrupt) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
+        tts?.speak(text, queueMode, null, utteranceId ?: "default_utterance")
     }
 
     private fun speakInternal(text: String, interrupt: Boolean) {
         val queueMode = if (interrupt) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
-        tts?.speak(text, queueMode, null, null)
+        tts?.speak(text, queueMode, null, "default_utterance")
+    }
+
+    fun stop() {
+        tts?.stop()
+        synchronized(pendingUtterances) {
+            pendingUtterances.clear()
+        }
+        onLastUtteranceDone = null
     }
 
     fun setLanguage(language: String) {
@@ -67,7 +97,7 @@ class TtsManager(context: Context) {
     }
 
     fun shutdown() {
-        tts?.stop()
+        stop()
         tts?.shutdown()
         tts = null
         isInitialized = false

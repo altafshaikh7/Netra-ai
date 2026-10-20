@@ -38,7 +38,6 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -47,6 +46,7 @@ import androidx.compose.material.icons.filled.FlashAuto
 import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
@@ -64,7 +64,6 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -90,6 +89,7 @@ import com.example.netraai.detection.WalkingModeAnalyzer
 import com.example.netraai.feedback.AlertEngine
 import com.example.netraai.feedback.FlashlightAutoController
 import com.example.netraai.feedback.FlashlightMode
+import com.example.netraai.ocr.TextReader
 import com.example.netraai.ui.SettingsSheet
 import com.example.netraai.ui.theme.DangerRed
 import com.example.netraai.ui.theme.DarkBackground
@@ -102,7 +102,9 @@ import com.example.netraai.ui.theme.TextPrimary
 import com.example.netraai.ui.theme.TextSecondary
 import com.example.netraai.ui.theme.WalkingGreen
 import com.example.netraai.voice.TtsManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
@@ -112,6 +114,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var detectorHelper: ObjectDetectorHelper
     private lateinit var walkingModeAnalyzer: WalkingModeAnalyzer
     private val flashlightController = FlashlightAutoController()
+    private val textReader = TextReader()
 
     private var cameraControl: androidx.camera.core.CameraControl? = null
     private var hasFlashUnit: Boolean = false
@@ -125,6 +128,7 @@ class MainActivity : ComponentActivity() {
     private var isWalkingModeActive by mutableStateOf(false)
     private var showSettingsSheet by mutableStateOf(false)
     private var currentLanguage by mutableStateOf("en")
+    private var isReadingActive by mutableStateOf(false)
 
     // Debug overlay data
     private var debugDetections by mutableStateOf<List<DetectedObstacle>>(emptyList())
@@ -225,6 +229,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun isMostlyDevanagari(text: String): Boolean {
+        var devanagariCount = 0
+        var letterCount = 0
+        for (ch in text) {
+            if (ch.isLetter()) {
+                letterCount++
+                if (ch in '\u0900'..'\u097F') {
+                    devanagariCount++
+                }
+            }
+        }
+        return letterCount > 0 && (devanagariCount.toFloat() / letterCount) >= 0.5f
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -247,7 +265,7 @@ class MainActivity : ComponentActivity() {
                 }
             },
             onAnalysisComplete = { confirmed, rawAccepted, fps, infMs, uprightW, uprightH, gateState, speed, sharpness ->
-                if (isWalkingModeActive && gateState == GateStatus.ACTIVE) {
+                if (isWalkingModeActive && gateState == GateStatus.ACTIVE && !isReadingActive) {
                     lifecycleScope.launch {
                         val spoken = alertEngine.processObstacles(confirmed, currentLanguage)
                         if (spoken != null && spoken.priority == AlertPriority.PRIORITY_1) {
@@ -276,6 +294,51 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        walkingModeAnalyzer.onTextScanned = { bitmap, rotationDegrees ->
+            lifecycleScope.launch(Dispatchers.IO) {
+                try {
+                    val recognizedText = textReader.readText(bitmap, rotationDegrees)
+                    withContext(Dispatchers.Main) {
+                        if (recognizedText.isBlank()) {
+                            isReadingActive = false
+                            val msg = if (currentLanguage == "hi") "कोई पाठ नहीं मिला, पास आएं और स्थिर रहें।" else "No text found, move closer and hold steady."
+                            ttsManager.speak(msg, interrupt = true)
+                        } else {
+                            val useHindiVoice = isMostlyDevanagari(recognizedText)
+                            if (useHindiVoice) {
+                                ttsManager.setLanguage("hi")
+                            } else {
+                                ttsManager.setLanguage("en")
+                            }
+
+                            val sentences = recognizedText.split(Regex("(?<=[.!?])\\s+")).filter { it.isNotBlank() }
+                            for (i in sentences.indices) {
+                                val sentence = sentences[i].trim()
+                                val isLast = (i == sentences.size - 1)
+                                if (isLast) {
+                                    ttsManager.speak(sentence, interrupt = (i == 0), utteranceId = "last_utterance", onDone = {
+                                        runOnUiThread {
+                                            ttsManager.setLanguage(currentLanguage)
+                                            isReadingActive = false
+                                        }
+                                    })
+                                } else {
+                                    ttsManager.speak(sentence, interrupt = (i == 0), utteranceId = "chunk_$i")
+                                }
+                            }
+                        }
+                    }
+                } catch (_: Exception) {
+                    withContext(Dispatchers.Main) {
+                        ttsManager.setLanguage(currentLanguage)
+                        isReadingActive = false
+                        val msg = if (currentLanguage == "hi") "पाठ पढ़ने में त्रुटि।" else "Error reading text."
+                        ttsManager.speak(msg, interrupt = true)
+                    }
+                }
+            }
+        }
+
         checkPermissions()
 
         lifecycleScope.launch {
@@ -287,7 +350,9 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             preferencesManager.languageFlow.collect { lang ->
                 currentLanguage = lang
-                ttsManager.setLanguage(lang)
+                if (!isReadingActive) {
+                    ttsManager.setLanguage(lang)
+                }
             }
         }
 
@@ -467,6 +532,7 @@ class MainActivity : ComponentActivity() {
                                     isWalkingModeActive = isWalkingModeActive,
                                     flashlightMode = flashlightModeState,
                                     currentLanguage = currentLanguageState,
+                                    isReadingActive = isReadingActive,
                                     onToggleWalkingMode = {
                                         localView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                                         if (!isWalkingModeActive) {
@@ -491,6 +557,21 @@ class MainActivity : ComponentActivity() {
                                     onLongClickWalkingMode = {
                                         localView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                                         walkingModeAnalyzer.debugCaptureRequested = true
+                                    },
+                                    onReadTextClicked = {
+                                        localView.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                                        if (isReadingActive) {
+                                            isReadingActive = false
+                                            ttsManager.stop()
+                                            ttsManager.setLanguage(currentLanguage)
+                                            val stopMsg = if (currentLanguageState == "hi") "रुक गए" else "Stopped"
+                                            ttsManager.speak(stopMsg, interrupt = true)
+                                        } else {
+                                            isReadingActive = true
+                                            val readingMsg = if (currentLanguageState == "hi") "पढ़ रहे हैं" else "Reading"
+                                            ttsManager.speak(readingMsg, interrupt = true)
+                                            walkingModeAnalyzer.readTextRequested = true
+                                        }
                                     },
                                     onCycleFlashlight = {
                                         localView.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
@@ -610,6 +691,7 @@ class MainActivity : ComponentActivity() {
         walkingModeAnalyzer.motionGate.unregister(this)
         applyFlashlightState(false)
         detectorHelper.close()
+        textReader.close()
         ttsManager.shutdown()
     }
 }
@@ -836,8 +918,10 @@ private fun BottomControlDock(
     isWalkingModeActive: Boolean,
     flashlightMode: FlashlightMode,
     currentLanguage: String,
+    isReadingActive: Boolean,
     onToggleWalkingMode: () -> Unit,
     onLongClickWalkingMode: () -> Unit,
+    onReadTextClicked: () -> Unit,
     onCycleFlashlight: () -> Unit,
     onToggleLanguage: () -> Unit,
     onSosClicked: () -> Unit,
@@ -849,6 +933,12 @@ private fun BottomControlDock(
         targetValue = if (isWalkingModeActive) DangerRed else WalkingGreen,
         animationSpec = tween(250),
         label = "walkingBtnColor"
+    )
+
+    val readBtnColor by animateColorAsState(
+        targetValue = if (isReadingActive) DangerRed else DarkCard,
+        animationSpec = tween(250),
+        label = "readBtnColor"
     )
 
     Card(
@@ -896,7 +986,7 @@ private fun BottomControlDock(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Button(
                     onClick = onCycleFlashlight,
@@ -921,13 +1011,13 @@ private fun BottomControlDock(
                             },
                             contentDescription = null,
                             tint = ElectricAmber,
-                            modifier = Modifier.size(24.dp)
+                            modifier = Modifier.size(22.dp)
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = flashlightMode.name,
                             color = TextPrimary,
-                            fontSize = 11.sp,
+                            fontSize = 10.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -952,13 +1042,48 @@ private fun BottomControlDock(
                             imageVector = Icons.Default.Language,
                             contentDescription = null,
                             tint = ElectricCyan,
-                            modifier = Modifier.size(24.dp)
+                            modifier = Modifier.size(22.dp)
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = if (isHindi) "हिंदी" else "EN",
                             color = TextPrimary,
-                            fontSize = 12.sp,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Button(
+                    onClick = onReadTextClicked,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(72.dp)
+                        .semantics {
+                            contentDescription = if (isReadingActive) {
+                                if (isHindi) "पढ़ना बंद करें" else "Stop reading text"
+                            } else {
+                                if (isHindi) "पाठ पढ़ें" else "Read visible text aloud"
+                            }
+                        },
+                    colors = ButtonDefaults.buttonColors(containerColor = readBtnColor),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MenuBook,
+                            contentDescription = null,
+                            tint = ElectricCyan,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = if (isReadingActive) (if (isHindi) "रोकें" else "Stop") else (if (isHindi) "पढ़ें" else "Read"),
+                            color = TextPrimary,
+                            fontSize = 10.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -983,13 +1108,13 @@ private fun BottomControlDock(
                             imageVector = Icons.Default.Warning,
                             contentDescription = null,
                             tint = DangerRed,
-                            modifier = Modifier.size(24.dp)
+                            modifier = Modifier.size(22.dp)
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = "SOS",
                             color = DangerRed,
-                            fontSize = 12.sp,
+                            fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -1014,13 +1139,13 @@ private fun BottomControlDock(
                             imageVector = Icons.Default.Settings,
                             contentDescription = null,
                             tint = ElectricCyan,
-                            modifier = Modifier.size(24.dp)
+                            modifier = Modifier.size(22.dp)
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = "SET",
                             color = TextPrimary,
-                            fontSize = 12.sp,
+                            fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }

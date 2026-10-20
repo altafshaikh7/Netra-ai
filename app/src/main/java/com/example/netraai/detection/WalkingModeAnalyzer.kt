@@ -19,6 +19,7 @@ import java.io.FileOutputStream
  * - Runs MediaPipe object detection with sensor rotation.
  * - Confirms detections temporally via [TemporalTracker] (4 of 6 frames).
  * - Supports capturing the exact upright model-input frame for debugging.
+ * - Supports [readTextRequested] for offline OCR on demand.
  */
 class WalkingModeAnalyzer(
     private val detectorHelper: ObjectDetectorHelper,
@@ -46,6 +47,11 @@ class WalkingModeAnalyzer(
 
     @Volatile
     var debugCaptureRequested: Boolean = false
+
+    @Volatile
+    var readTextRequested: Boolean = false
+    var onTextScanned: ((Bitmap, Int) -> Unit)? = null
+
     private var appContext: Context? = null
     var onDebugFrameSaved: ((String) -> Unit)? = null
 
@@ -66,6 +72,14 @@ class WalkingModeAnalyzer(
             // 1. Sample luma regardless of walking mode (for auto flashlight)
             val luma = estimateAverageLuma(imageProxy, sampleStep = LUMA_SAMPLE_STEP)
             onLumaSampled?.invoke(luma)
+
+            // STEP 3 Item 2: OCR request handling (works even when walking mode is off)
+            if (readTextRequested) {
+                readTextRequested = false
+                val bitmap = imageProxy.toBitmap()
+                val rotationDegrees = imageProxy.imageInfo.rotationDegrees
+                onTextScanned?.invoke(bitmap, rotationDegrees)
+            }
 
             if (!isWalkingModeEnabled) {
                 return
