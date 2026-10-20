@@ -1,6 +1,7 @@
 package com.example.netraai.camera
 
 import android.util.Log
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
@@ -25,12 +26,14 @@ private const val TAG = "CameraPreview"
  *
  * @param modifier Compose modifier.
  * @param analyzer Optional [ImageAnalysis.Analyzer] to attach for background frame processing.
+ * @param onCameraBound Callback providing the bound [Camera] instance for torch/flashlight control.
  * @param onError Callback invoked when camera lifecycle binding fails, logging the error with [Log.e].
  */
 @Composable
 fun CameraPreview(
     modifier: Modifier = Modifier,
     analyzer: ImageAnalysis.Analyzer? = null,
+    onCameraBound: ((Camera) -> Unit)? = null,
     onError: ((Throwable) -> Unit)? = null
 ) {
     val context = LocalContext.current
@@ -62,7 +65,7 @@ fun CameraPreview(
 
                     cameraProvider.unbindAll()
 
-                    if (analyzer != null) {
+                    val camera = if (analyzer != null) {
                         val imageAnalysis = ImageAnalysis.Builder()
                             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                             .build()
@@ -81,6 +84,7 @@ fun CameraPreview(
                             preview
                         )
                     }
+                    onCameraBound?.invoke(camera)
                 } catch (exc: Throwable) {
                     Log.e(TAG, "Camera binding failed", exc)
                     onError?.invoke(exc)

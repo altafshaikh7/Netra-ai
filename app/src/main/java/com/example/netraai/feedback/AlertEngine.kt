@@ -76,7 +76,8 @@ class AlertEngine(
                         candidate.label,
                         candidate.direction,
                         candidate.distance,
-                        language
+                        language,
+                        candidate.isBorderline
                     )
                     speakAction(sentence, true)
                     return candidate
@@ -88,7 +89,8 @@ class AlertEngine(
                         candidate.label,
                         candidate.direction,
                         candidate.distance,
-                        language
+                        language,
+                        candidate.isBorderline
                     )
                     speakAction(sentence, false)
                     return candidate
@@ -104,7 +106,8 @@ class AlertEngine(
                         candidate.label,
                         candidate.direction,
                         candidate.distance,
-                        language
+                        language,
+                        candidate.isBorderline
                     )
                     speakAction(sentence, false)
                     return candidate

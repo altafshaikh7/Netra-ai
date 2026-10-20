@@ -133,4 +133,33 @@ class AlertEngineTest {
         assertEquals("Bus ahead, very close.", spokenText)
         assertEquals(true, wasInterrupted)
     }
+
+    @Test
+    fun testBorderlineConfidencePhrasing() {
+        val borderlineCarEn = DetectedObstacle(
+            label = "car",
+            confidence = 0.58f,
+            direction = Direction.AHEAD,
+            distance = Distance.VERY_CLOSE,
+            priority = AlertPriority.PRIORITY_1,
+            isBorderline = true
+        )
+
+        alertEngine.processObstacles(listOf(borderlineCarEn), language = "en")
+        assertEquals("Maybe Car ahead, very close.", spokenText)
+
+        alertEngine.reset()
+
+        val borderlineCarHi = DetectedObstacle(
+            label = "car",
+            confidence = 0.58f,
+            direction = Direction.AHEAD,
+            distance = Distance.VERY_CLOSE,
+            priority = AlertPriority.PRIORITY_1,
+            isBorderline = true
+        )
+
+        alertEngine.processObstacles(listOf(borderlineCarHi), language = "hi")
+        assertEquals("शायद कार सामने, बहुत पास।", spokenText)
+    }
 }

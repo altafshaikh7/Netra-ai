@@ -91,14 +91,15 @@ object AlertStrings {
 
     /**
      * Builds short, clear alert sentences, e.g.:
-     * English: "Car ahead, very close."
-     * Hindi: "कार सामने, बहुत पास।"
+     * English: "Car ahead, very close." or "Maybe car ahead, very close."
+     * Hindi: "कार सामने, बहुत पास।" or "शायद कार सामने, बहुत पास।"
      */
     fun buildAlertSentence(
         rawLabel: String,
         direction: Direction,
         distance: Distance,
-        language: String
+        language: String,
+        isBorderline: Boolean = false
     ): String {
         val isHindi = language.equals("hi", ignoreCase = true)
         val labelStr = getLabel(rawLabel, language)
@@ -106,9 +107,17 @@ object AlertStrings {
         val distStr = getDistance(distance, language)
 
         return if (isHindi) {
-            "$labelStr $dirStr, $distStr।"
+            if (isBorderline) {
+                "शायद $labelStr $dirStr, $distStr।"
+            } else {
+                "$labelStr $dirStr, $distStr।"
+            }
         } else {
-            "$labelStr $dirStr, $distStr."
+            if (isBorderline) {
+                "Maybe $labelStr $dirStr, $distStr."
+            } else {
+                "$labelStr $dirStr, $distStr."
+            }
         }
     }
 }

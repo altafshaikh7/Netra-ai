@@ -5,7 +5,11 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.netraai.detection.DetectionSensitivity
+import com.example.netraai.feedback.FlashlightMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -19,19 +23,69 @@ class PreferencesManager(private val context: Context) {
 
     companion object {
         val KEY_FIRST_LAUNCH = booleanPreferencesKey("is_first_launch")
+        val KEY_DISCLAIMER_DISMISSED = booleanPreferencesKey("is_disclaimer_dismissed")
+        val KEY_LANGUAGE = stringPreferencesKey("language")
+        val KEY_SPEECH_SPEED = floatPreferencesKey("speech_speed")
+        val KEY_FLASHLIGHT_MODE = stringPreferencesKey("flashlight_mode")
+        val KEY_DEBUG_OVERLAY = booleanPreferencesKey("debug_overlay")
+        val KEY_DETECTION_SENSITIVITY = stringPreferencesKey("detection_sensitivity")
     }
 
     val isFirstLaunchFlow: Flow<Boolean> = context.dataStore.data.map { preferences ->
         preferences[KEY_FIRST_LAUNCH] ?: true
     }
 
-    suspend fun isFirstLaunch(): Boolean {
-        return isFirstLaunchFlow.first()
+    val isDisclaimerDismissedFlow: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[KEY_DISCLAIMER_DISMISSED] ?: false
     }
 
+    val languageFlow: Flow<String> = context.dataStore.data.map { preferences ->
+        preferences[KEY_LANGUAGE] ?: "en"
+    }
+
+    val speechSpeedFlow: Flow<Float> = context.dataStore.data.map { preferences ->
+        preferences[KEY_SPEECH_SPEED] ?: 1.0f
+    }
+
+    val flashlightModeFlow: Flow<FlashlightMode> = context.dataStore.data.map { preferences ->
+        FlashlightMode.fromString(preferences[KEY_FLASHLIGHT_MODE] ?: "AUTO")
+    }
+
+    val debugOverlayFlow: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[KEY_DEBUG_OVERLAY] ?: false
+    }
+
+    val detectionSensitivityFlow: Flow<DetectionSensitivity> = context.dataStore.data.map { preferences ->
+        DetectionSensitivity.fromString(preferences[KEY_DETECTION_SENSITIVITY] ?: "NORMAL")
+    }
+
+    suspend fun isFirstLaunch(): Boolean = isFirstLaunchFlow.first()
+
     suspend fun setFirstLaunchCompleted() {
-        context.dataStore.edit { preferences ->
-            preferences[KEY_FIRST_LAUNCH] = false
-        }
+        context.dataStore.edit { it[KEY_FIRST_LAUNCH] = false }
+    }
+
+    suspend fun setDisclaimerDismissed(dismissed: Boolean) {
+        context.dataStore.edit { it[KEY_DISCLAIMER_DISMISSED] = dismissed }
+    }
+
+    suspend fun setLanguage(language: String) {
+        context.dataStore.edit { it[KEY_LANGUAGE] = language }
+    }
+
+    suspend fun setSpeechSpeed(speed: Float) {
+        context.dataStore.edit { it[KEY_SPEECH_SPEED] = speed }
+    }
+
+    suspend fun setFlashlightMode(mode: FlashlightMode) {
+        context.dataStore.edit { it[KEY_FLASHLIGHT_MODE] = mode.name }
+    }
+
+    suspend fun setDebugOverlay(enabled: Boolean) {
+        context.dataStore.edit { it[KEY_DEBUG_OVERLAY] = enabled }
+    }
+
+    suspend fun setDetectionSensitivity(sensitivity: DetectionSensitivity) {
+        context.dataStore.edit { it[KEY_DETECTION_SENSITIVITY] = sensitivity.name }
     }
 }
