@@ -3,6 +3,7 @@ package com.example.netraai.detection
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -20,7 +21,7 @@ import androidx.compose.ui.unit.sp
 
 /**
  * Debug overlay for testing and tuning: draws bounding boxes, classification labels,
- * confidence percentages, FPS, and inference latency.
+ * confidence percentages, FPS, inference latency, motion angular speed, sharpness score, and gate status.
  */
 @Composable
 fun DebugOverlay(
@@ -29,7 +30,10 @@ fun DebugOverlay(
     inferenceTimeMs: Long,
     uprightWidth: Int,
     uprightHeight: Int,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    gateStatus: GateStatus = GateStatus.ACTIVE,
+    angularSpeed: Float = 0f,
+    sharpnessScore: Float = 0f
 ) {
     Box(modifier = modifier.fillMaxSize()) {
         if (uprightWidth > 0 && uprightHeight > 0) {
@@ -59,8 +63,7 @@ fun DebugOverlay(
                         style = Stroke(width = 3.dp.toPx())
                     )
 
-                    val prefix = if (detection.isBorderline) "Maybe " else ""
-                    val labelText = "$prefix${detection.label} ${String.format("%.0f%%", detection.confidence * 100)} (${detection.direction.name})"
+                    val labelText = "${detection.label} ${String.format("%.0f%%", detection.confidence * 100)} (${detection.direction.name})"
 
                     drawContext.canvas.nativeCanvas.apply {
                         val paint = android.graphics.Paint().apply {
@@ -80,14 +83,27 @@ fun DebugOverlay(
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .padding(start = 16.dp, top = 88.dp)
-                .background(Color.Black.copy(alpha = 0.8f), shape = RoundedCornerShape(8.dp))
-                .padding(horizontal = 12.dp, vertical = 6.dp)
+                .background(Color.Black.copy(alpha = 0.85f), shape = RoundedCornerShape(8.dp))
+                .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
-            Text(
-                text = "DEBUG | FPS: $fps | Latency: ${inferenceTimeMs}ms | Detected: ${detections.size}",
-                color = Color(0xFF00E5FF),
-                fontSize = 12.sp
-            )
+            Column {
+                Text(
+                    text = "DEBUG | FPS: $fps | Latency: ${inferenceTimeMs}ms | Detected: ${detections.size}",
+                    color = Color(0xFF00E5FF),
+                    fontSize = 12.sp
+                )
+                val statusText = when (gateStatus) {
+                    GateStatus.ACTIVE -> "active"
+                    GateStatus.PAUSED_MOVING -> "paused: moving"
+                    GateStatus.PAUSED_BLURRY -> "paused: blurry"
+                    GateStatus.PAUSED_SETTLING -> "paused: settling"
+                }
+                Text(
+                    text = "Status: $statusText | Speed: ${String.format("%.2f", angularSpeed)} rad/s | Sharpness: ${String.format("%.1f", sharpnessScore)}",
+                    color = if (gateStatus.isPaused) Color(0xFFFFD600) else Color(0xFF00E676),
+                    fontSize = 11.sp
+                )
+            }
         }
     }
 }

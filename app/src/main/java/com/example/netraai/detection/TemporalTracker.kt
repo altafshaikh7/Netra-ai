@@ -1,20 +1,24 @@
 package com.example.netraai.detection
 
+import android.graphics.RectF
 import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 
 /**
  * Tracks detected obstacles over a sliding window of frames to filter out transient false positives.
- * An obstacle is confirmed only if it appears in at least [minConfirmations] out of the last [windowSize] frames
- * with the same label and similar position.
+ * Policy: Stricter temporal confirmation (4 of 6 frames, consistent position, and average score >= threshold).
  *
- * @param windowSize Total frames kept in sliding history (default: 5).
- * @param minConfirmations Minimum frame appearances required for confirmation (default: 3).
- * @param positionTolerance Normalized horizontal delta within which positions are considered similar (default: 0.35f).
+ * @param windowSize Total frames kept in sliding history (default: 6).
+ * @param minConfirmations Minimum frame appearances required for confirmation (default: 4).
+ * @param positionTolerance Normalized horizontal delta within which positions are considered similar (default: 0.20f).
+ * @param minIoU Minimum bounding box IoU required for position consistency (default: 0.30f).
  */
 class TemporalTracker(
     val windowSize: Int = DEFAULT_WINDOW_SIZE,
     val minConfirmations: Int = DEFAULT_MIN_CONFIRMATIONS,
-    val positionTolerance: Float = DEFAULT_POSITION_TOLERANCE
+    val positionTolerance: Float = DEFAULT_POSITION_TOLERANCE,
+    val minIoU: Float = DEFAULT_MIN_IOU
 ) {
     private val frameHistory = ArrayDeque<List<DetectedObstacle>>()
 
@@ -23,10 +27,14 @@ class TemporalTracker(
      * temporally confirmed across the history window.
      *
      * @param currentDetections Detections from the current frame.
+     * @param sensitivity Detection sensitivity level.
      * @return List of detections confirmed by temporal persistence.
      */
     @Synchronized
-    fun filterConfirmed(currentDetections: List<DetectedObstacle>): List<DetectedObstacle> {
+    fun filterConfirmed(
+        currentDetections: List<DetectedObstacle>,
+        sensitivity: DetectionSensitivity = DetectionSensitivity.NORMAL
+    ): List<DetectedObstacle> {
         // Add current frame to history
         frameHistory.addLast(currentDetections)
         while (frameHistory.size > windowSize) {
@@ -39,24 +47,61 @@ class TemporalTracker(
 
         // Evaluate each detection in the current frame
         return currentDetections.filter { candidate ->
-            val matchingFramesCount = frameHistory.count { historicalFrame ->
-                historicalFrame.any { isSimilar(it, candidate) }
+            val matchingHits = mutableListOf<DetectedObstacle>()
+
+            for (historicalFrame in frameHistory) {
+                val match = historicalFrame.firstOrNull { isSimilar(it, candidate) }
+                if (match != null) {
+                    matchingHits.add(match)
+                }
             }
-            matchingFramesCount >= minConfirmations
+
+            // Must appear in at least minConfirmations out of windowSize frames
+            if (matchingHits.size < minConfirmations) {
+                return@filter false
+            }
+
+            // Must satisfy average score >= threshold
+            val avgScore = matchingHits.map { it.confidence }.average().toFloat()
+            val threshold = DetectionFilter.getThreshold(candidate.label, sensitivity)
+            avgScore >= threshold
         }
     }
 
     /**
      * Checks if two obstacles match in label and position.
-     * Considers position similar if either:
-     * 1. They have the identical Direction (LEFT, AHEAD, RIGHT), OR
-     * 2. Their normalized horizontal center distance is within [positionTolerance].
+     * Position match requires:
+     * 1. Same label
+     * 2. Close horizontal center (<= positionTolerance) OR IoU >= minIoU
      */
     fun isSimilar(a: DetectedObstacle, b: DetectedObstacle): Boolean {
         if (!a.label.equals(b.label, ignoreCase = true)) return false
-        val sameDirection = a.direction == b.direction
+
         val closeCenterX = abs(a.normalizedCenterX - b.normalizedCenterX) <= positionTolerance
-        return sameDirection || closeCenterX
+        val boxIoU = computeIoU(a.boundingBox, b.boundingBox)
+
+        return (closeCenterX && a.direction == b.direction) || boxIoU >= minIoU
+    }
+
+    fun computeIoU(box1: RectF?, box2: RectF?): Float {
+        if (box1 == null || box2 == null) return 0f
+
+        val intersectionLeft = max(box1.left, box2.left)
+        val intersectionTop = max(box1.top, box2.top)
+        val intersectionRight = min(box1.right, box2.right)
+        val intersectionBottom = min(box1.bottom, box2.bottom)
+
+        val intersectionWidth = (intersectionRight - intersectionLeft).coerceAtLeast(0f)
+        val intersectionHeight = (intersectionBottom - intersectionTop).coerceAtLeast(0f)
+        val intersectionArea = intersectionWidth * intersectionHeight
+
+        val area1 = ((box1.right - box1.left) * (box1.bottom - box1.top)).coerceAtLeast(0f)
+        val area2 = ((box2.right - box2.left) * (box2.bottom - box2.top)).coerceAtLeast(0f)
+
+        val unionArea = area1 + area2 - intersectionArea
+        if (unionArea <= 0f) return 0f
+
+        return intersectionArea / unionArea
     }
 
     @Synchronized
@@ -65,8 +110,9 @@ class TemporalTracker(
     }
 
     companion object {
-        const val DEFAULT_WINDOW_SIZE = 5
-        const val DEFAULT_MIN_CONFIRMATIONS = 3
-        const val DEFAULT_POSITION_TOLERANCE = 0.35f
+        const val DEFAULT_WINDOW_SIZE = 6
+        const val DEFAULT_MIN_CONFIRMATIONS = 4
+        const val DEFAULT_POSITION_TOLERANCE = 0.20f
+        const val DEFAULT_MIN_IOU = 0.30f
     }
 }

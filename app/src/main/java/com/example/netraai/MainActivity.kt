@@ -13,6 +13,7 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.provider.Settings
 import android.view.HapticFeedbackConstants
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -59,6 +60,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -82,6 +84,7 @@ import com.example.netraai.detection.AlertPriority
 import com.example.netraai.detection.DebugOverlay
 import com.example.netraai.detection.DetectedObstacle
 import com.example.netraai.detection.DetectionSensitivity
+import com.example.netraai.detection.GateStatus
 import com.example.netraai.detection.ObjectDetectorHelper
 import com.example.netraai.detection.WalkingModeAnalyzer
 import com.example.netraai.feedback.AlertEngine
@@ -126,12 +129,14 @@ class MainActivity : ComponentActivity() {
     private var debugInferenceTimeMs by mutableLongStateOf(0L)
     private var debugUprightWidth by mutableIntStateOf(0)
     private var debugUprightHeight by mutableIntStateOf(0)
+    private var debugGateStatus by mutableStateOf(GateStatus.ACTIVE)
+    private var debugAngularSpeed by mutableFloatStateOf(0f)
+    private var debugSharpnessScore by mutableFloatStateOf(0f)
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ ->
         checkPermissions()
-        val currentLang = runCatching { preferencesManager.languageFlow }.getOrNull()
         if (hasPermissions) {
             ttsManager.speak("Permissions granted.")
         } else {
@@ -212,7 +217,7 @@ class MainActivity : ComponentActivity() {
             if (speakAnnouncement) {
                 ttsManager.speak(reason)
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             // Torch control error
         }
     }
@@ -231,7 +236,6 @@ class MainActivity : ComponentActivity() {
             onLumaSampled = { luma ->
                 lifecycleScope.launch {
                     val currentMode = preferencesManager.flashlightModeFlow
-                    // Check flashlight auto state if walking mode is active
                     if (isWalkingModeActive) {
                         launch {
                             currentMode.collect { mode ->
@@ -248,12 +252,9 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             },
-            onAnalysisComplete = { confirmed, rawAccepted, fps, infMs, uprightW, uprightH ->
-                if (isWalkingModeActive) {
+            onAnalysisComplete = { confirmed, rawAccepted, fps, infMs, uprightW, uprightH, gateState, speed, sharpness ->
+                if (isWalkingModeActive && gateState == GateStatus.ACTIVE) {
                     lifecycleScope.launch {
-                        val lang = preferencesManager.isFirstLaunch() // trigger coroutine context
-                        val currentLang = if (ttsManager.isSpeaking) "en" else "en" // default
-                        // Alert processing on confirmed obstacles
                         val spoken = alertEngine.processObstacles(confirmed, currentLanguage)
                         if (spoken != null && spoken.priority == AlertPriority.PRIORITY_1) {
                             triggerDangerHaptic()
@@ -267,16 +268,23 @@ class MainActivity : ComponentActivity() {
                     debugInferenceTimeMs = infMs
                     debugUprightWidth = uprightW
                     debugUprightHeight = uprightH
+                    debugGateStatus = gateState
+                    debugAngularSpeed = speed
+                    debugSharpnessScore = sharpness
                 }
             }
         )
+        walkingModeAnalyzer.setContext(this)
+        walkingModeAnalyzer.onDebugFrameSaved = { path ->
+            runOnUiThread {
+                ttsManager.speak("Debug frame saved to cache.")
+                Toast.makeText(this, "Debug frame saved: $path", Toast.LENGTH_LONG).show()
+            }
+        }
 
         checkPermissions()
 
-        // Handle initial first launch announcement and DataStore values
         lifecycleScope.launch {
-            val isFirst = preferencesManager.isFirstLaunch()
-            val savedLanguage = preferencesManager.isFirstLaunch() // Read language
             preferencesManager.languageFlow.collect { lang ->
                 currentLanguage = lang
                 ttsManager.setLanguage(lang)
@@ -300,9 +308,9 @@ class MainActivity : ComponentActivity() {
             val greeting = if (isFirst) {
                 preferencesManager.setFirstLaunchCompleted()
                 if (currentLanguage == "hi") {
-                    "नेत्रा तैयार है। ध्यान दें: यह ऐप सहायता करता है लेकिन सफेद छड़ी या गाइड का विकल्प नहीं है। सीढ़ियां, गड्ढे और खुले नाले अभी डिटेक्ट नहीं होते हैं।"
+                    "नेत्रा तैयार है। ध्यान दें: यह ऐप सहायता करता है लेकिन सफेद छड़ी या गाइड का विकल्प नहीं है।"
                 } else {
-                    "Netra ready. Note: this app assists but does not replace a white cane or guide dog. Stairs, potholes, and open drains are not detected yet."
+                    "Netra ready. Note: this app assists but does not replace a white cane or guide dog."
                 }
             } else {
                 if (currentLanguage == "hi") "नेत्रा तैयार है।" else "Netra ready."
@@ -310,7 +318,6 @@ class MainActivity : ComponentActivity() {
 
             ttsManager.speak(greeting)
 
-            // Auto-launch permission request after greeting if needed
             if (!hasPermissions && !isPermanentlyDenied) {
                 requestPermissionLauncher.launch(
                     arrayOf(
@@ -354,14 +361,17 @@ class MainActivity : ComponentActivity() {
                             )
                         }
 
-                        // 2. Debug Overlay (Toggled via settings or long press)
+                        // 2. Debug Overlay
                         if (isDebugOverlayState && isWalkingModeActive) {
                             DebugOverlay(
                                 detections = debugDetections,
                                 fps = debugFps,
                                 inferenceTimeMs = debugInferenceTimeMs,
                                 uprightWidth = debugUprightWidth,
-                                uprightHeight = debugUprightHeight
+                                uprightHeight = debugUprightHeight,
+                                gateStatus = debugGateStatus,
+                                angularSpeed = debugAngularSpeed,
+                                sharpnessScore = debugSharpnessScore
                             )
                         }
 
@@ -381,10 +391,9 @@ class MainActivity : ComponentActivity() {
                                 flashlightMode = flashlightModeState,
                                 onToggleDebugOverlay = {
                                     localView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                    walkingModeAnalyzer.debugCaptureRequested = true
                                     lifecycleScope.launch {
                                         preferencesManager.setDebugOverlay(!isDebugOverlayState)
-                                        val msg = if (!isDebugOverlayState) "Debug overlay on" else "Debug overlay off"
-                                        ttsManager.speak(msg)
                                     }
                                 },
                                 onOpenSettings = {
@@ -408,6 +417,27 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                 )
+                            }
+
+                            // STEP 3 Item 5: "Hold steady" indicator badge when detection is paused due to motion or blur
+                            if (isWalkingModeActive && debugGateStatus.isPaused) {
+                                Card(
+                                    modifier = Modifier
+                                        .padding(top = 16.dp)
+                                        .semantics {
+                                            contentDescription = if (currentLanguageState == "hi") "कैमरा स्थिर रखें" else "Hold camera steady"
+                                        },
+                                    colors = CardDefaults.cardColors(containerColor = ElectricAmber),
+                                    shape = RoundedCornerShape(20.dp)
+                                ) {
+                                    Text(
+                                        text = if (currentLanguageState == "hi") "🖐️ कैमरा स्थिर रखें" else "🖐️ Hold camera steady",
+                                        color = Color.Black,
+                                        fontSize = 18.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)
+                                    )
+                                }
                             }
 
                             Spacer(modifier = Modifier.weight(1f))
@@ -445,7 +475,6 @@ class MainActivity : ComponentActivity() {
                                             val msg = if (currentLanguageState == "hi") "वॉकिंग मोड चालू" else "Walking mode on"
                                             ttsManager.speak(msg, interrupt = true)
 
-                                            // Apply manual flash if mode was ON
                                             if (flashlightModeState == FlashlightMode.ON) {
                                                 applyFlashlightState(true)
                                             }
@@ -458,6 +487,10 @@ class MainActivity : ComponentActivity() {
                                             val msg = if (currentLanguageState == "hi") "वॉकिंग मोड बंद" else "Walking mode off"
                                             ttsManager.speak(msg, interrupt = true)
                                         }
+                                    },
+                                    onLongClickWalkingMode = {
+                                        localView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                        walkingModeAnalyzer.debugCaptureRequested = true
                                     },
                                     onCycleFlashlight = {
                                         localView.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
@@ -554,18 +587,27 @@ class MainActivity : ComponentActivity() {
         if (!previousState && hasPermissions) {
             ttsManager.speak("Permissions granted.")
         }
+        if (hasPermissions) {
+            walkingModeAnalyzer.motionGate.register(this)
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        walkingModeAnalyzer.motionGate.unregister(this)
     }
 
     override fun onStop() {
         super.onStop()
-        // Turn off torch when app goes to background
         applyFlashlightState(false)
+        walkingModeAnalyzer.motionGate.unregister(this)
     }
 
     override fun onDestroy() {
         super.onDestroy()
         isWalkingModeActive = false
         walkingModeAnalyzer.isWalkingModeEnabled = false
+        walkingModeAnalyzer.motionGate.unregister(this)
         applyFlashlightState(false)
         detectorHelper.close()
         ttsManager.shutdown()
@@ -594,7 +636,7 @@ private fun TopBarSection(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Status Pill with long-press to toggle debug overlay
+        // Status Pill with long-press to capture debug frame
         Box(
             modifier = Modifier
                 .background(DarkSurfaceSemiOpaque, shape = RoundedCornerShape(24.dp))
@@ -604,14 +646,13 @@ private fun TopBarSection(
                 )
                 .padding(horizontal = 16.dp, vertical = 10.dp)
                 .semantics {
-                    contentDescription = "Status: Walking Mode ${if (isWalkingModeActive) "Active" else "Inactive"}, Language $language, Flashlight ${flashlightMode.name}. Long press to toggle debug overlay."
+                    contentDescription = "Status: Walking Mode ${if (isWalkingModeActive) "Active" else "Inactive"}, Language $language, Flashlight ${flashlightMode.name}. Long press to capture debug frame."
                 }
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // Status Indicator Dot
                 Box(
                     modifier = Modifier
                         .size(10.dp)
@@ -656,7 +697,6 @@ private fun TopBarSection(
             }
         }
 
-        // Settings Icon Button
         IconButton(
             onClick = onOpenSettings,
             modifier = Modifier
@@ -790,12 +830,14 @@ private fun PermissionRequestCard(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun BottomControlDock(
     isWalkingModeActive: Boolean,
     flashlightMode: FlashlightMode,
     currentLanguage: String,
     onToggleWalkingMode: () -> Unit,
+    onLongClickWalkingMode: () -> Unit,
     onCycleFlashlight: () -> Unit,
     onToggleLanguage: () -> Unit,
     onSosClicked: () -> Unit,
@@ -822,21 +864,24 @@ private fun BottomControlDock(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // 1. Primary Action Button: Large Walking Mode (Min 88dp height)
-            Button(
-                onClick = onToggleWalkingMode,
+            // 1. Primary Action Button: Large Walking Mode (Min 88dp height) with long-press debug capture
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(88.dp)
+                    .background(walkingBtnColor, shape = RoundedCornerShape(20.dp))
+                    .combinedClickable(
+                        onClick = onToggleWalkingMode,
+                        onLongClick = onLongClickWalkingMode
+                    )
                     .semantics {
                         contentDescription = if (isWalkingModeActive) {
-                            if (isHindi) "वॉकिंग मोड बंद करें। सक्रिय है।" else "Stop Walking Mode button. Walking mode is currently active."
+                            if (isHindi) "वॉकिंग मोड बंद करें। सक्रिय है। लॉन्ग प्रेस से इमेज सेव करें।" else "Stop Walking Mode button. Active. Long press to save debug frame."
                         } else {
                             if (isHindi) "वॉकिंग मोड शुरू करें।" else "Start Walking Mode button."
                         }
                     },
-                colors = ButtonDefaults.buttonColors(containerColor = walkingBtnColor),
-                shape = RoundedCornerShape(20.dp)
+                contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = if (isWalkingModeActive) {
@@ -855,7 +900,6 @@ private fun BottomControlDock(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // Flashlight Button (72dp height)
                 Button(
                     onClick = onCycleFlashlight,
                     modifier = Modifier
@@ -891,7 +935,6 @@ private fun BottomControlDock(
                     }
                 }
 
-                // Language Button (72dp height)
                 Button(
                     onClick = onToggleLanguage,
                     modifier = Modifier
@@ -923,7 +966,6 @@ private fun BottomControlDock(
                     }
                 }
 
-                // SOS Button (72dp height)
                 Button(
                     onClick = onSosClicked,
                     modifier = Modifier
@@ -955,7 +997,6 @@ private fun BottomControlDock(
                     }
                 }
 
-                // Settings Button (72dp height)
                 Button(
                     onClick = onOpenSettings,
                     modifier = Modifier
@@ -974,12 +1015,12 @@ private fun BottomControlDock(
                         Icon(
                             imageVector = Icons.Default.Settings,
                             contentDescription = null,
-                            tint = TextSecondary,
+                            tint = ElectricCyan,
                             modifier = Modifier.size(24.dp)
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Set",
+                            text = "SET",
                             color = TextPrimary,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold

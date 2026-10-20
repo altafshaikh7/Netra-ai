@@ -9,14 +9,7 @@ import com.example.netraai.voice.TtsManager
  * AlertEngine manages obstacle prioritization, speech queueing/interruptions,
  * cooldown suppression, and multi-language spoken feedback.
  *
- * Prioritization and Queue Rules:
- * - Priority 1 (Vehicles): Interrupts current speech immediately (QUEUE_FLUSH / interrupt=true).
- * - Priority 2 (Living beings): Queued behind current speech (QUEUE_ADD / interrupt=false).
- * - Priority 3 (Other obstacles): Spoken only when TTS is idle; skipped if TTS is currently speaking.
- *
- * Cooldown Rules:
- * - Around 4 seconds cooldown per (label + direction).
- * - Bypasses cooldown and alerts immediately if obstacle distance gets closer (e.g. FAR -> NEAR or NEAR -> VERY_CLOSE).
+ * Enforces rule: Person alerts ONLY when person is NEAR or VERY_CLOSE; ignore FAR persons completely.
  */
 class AlertEngine(
     private val speakAction: (text: String, interrupt: Boolean) -> Unit,
@@ -57,8 +50,13 @@ class AlertEngine(
                 .thenByDescending { it.confidence }
         )
 
-        // 2. Find the highest priority candidate that passes cooldown
+        // 2. Find the highest priority candidate that passes cooldown and distance rules
         for (candidate in sortedCandidates) {
+            // STEP 2 Item 7: Person alerts ONLY when person is NEAR or VERY_CLOSE; ignore FAR persons completely
+            if (candidate.label.equals("person", ignoreCase = true) && candidate.distance == Distance.FAR) {
+                continue
+            }
+
             val shouldAlert = cooldownTracker.shouldAlert(
                 label = candidate.label,
                 direction = candidate.direction,
@@ -68,47 +66,29 @@ class AlertEngine(
 
             if (!shouldAlert) continue
 
+            val sentence = AlertStrings.buildAlertSentence(
+                candidate.label,
+                candidate.direction,
+                candidate.distance,
+                language
+            )
+
             // 3. Apply TTS queueing rules based on Priority
             when (candidate.priority) {
                 AlertPriority.PRIORITY_1 -> {
-                    // Interrupt current speech
-                    val sentence = AlertStrings.buildAlertSentence(
-                        candidate.label,
-                        candidate.direction,
-                        candidate.distance,
-                        language,
-                        candidate.isBorderline
-                    )
                     speakAction(sentence, true)
                     return candidate
                 }
 
                 AlertPriority.PRIORITY_2 -> {
-                    // Queued speech
-                    val sentence = AlertStrings.buildAlertSentence(
-                        candidate.label,
-                        candidate.direction,
-                        candidate.distance,
-                        language,
-                        candidate.isBorderline
-                    )
                     speakAction(sentence, false)
                     return candidate
                 }
 
                 AlertPriority.PRIORITY_3 -> {
-                    // Only speak when TTS is idle
                     if (isTtsSpeaking()) {
-                        // Skip speaking this frame because TTS is already busy
                         continue
                     }
-                    val sentence = AlertStrings.buildAlertSentence(
-                        candidate.label,
-                        candidate.direction,
-                        candidate.distance,
-                        language,
-                        candidate.isBorderline
-                    )
                     speakAction(sentence, false)
                     return candidate
                 }

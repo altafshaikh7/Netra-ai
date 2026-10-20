@@ -12,9 +12,8 @@ import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.objectdetector.ObjectDetector
 
 /**
- * Helper class that wraps MediaPipe Tasks Vision ObjectDetector with the bundled
- * EfficientDet-Lite2 model, GPU acceleration with CPU fallback, upright rotation mapping,
- * and sensitivity/whitelist filtering.
+ * Helper class wrapping MediaPipe Tasks Vision ObjectDetector with float32 EfficientDet-Lite2 model
+ * (with INT8 model switchable via constant), GPU acceleration with CPU fallback, and strict filtering.
  */
 class ObjectDetectorHelper(
     context: Context,
@@ -105,13 +104,18 @@ class ObjectDetectorHelper(
                 val category = detection.categories().firstOrNull() ?: return@mapNotNull null
                 val label = category.categoryName() ?: category.displayName() ?: return@mapNotNull null
                 val score = category.score()
+                val box = detection.boundingBox() // Box in upright coordinate space
 
-                // Whitelist & score threshold filter
-                if (!DetectionFilter.isAccepted(label, score, sensitivity)) {
+                // STEP 1 Item 3: Log every raw detection BEFORE filtering at "NetraRaw"
+                Log.d(
+                    "NetraRaw",
+                    "Raw detection: label=$label, score=${String.format("%.2f", score)}, box=[L:${box.left.toInt()}, T:${box.top.toInt()}, R:${box.right.toInt()}, B:${box.bottom.toInt()}]"
+                )
+
+                // Whitelist, score threshold, size, and edge filtering
+                if (!DetectionFilter.isAccepted(label, score, box, uprightWidth, uprightHeight, sensitivity)) {
                     return@mapNotNull null
                 }
-
-                val box = detection.boundingBox() // Box in upright coordinate space
 
                 val centerX = box.centerX()
                 val normalizedCenterX = (centerX / uprightWidth).coerceIn(0f, 1f)
@@ -122,11 +126,11 @@ class ObjectDetectorHelper(
                 val distance = distanceEstimator.estimateDistance(label, direction, areaRatio)
 
                 val priority = AlertPriority.fromLabel(label)
-                val isBorderline = DetectionFilter.isBorderline(label, score, sensitivity)
 
+                // STEP 1 Item 3: Log every confirmed/accepted detection at "NetraDetection"
                 Log.d(
                     "NetraDetection",
-                    "Accepted: label=$label, score=${String.format("%.2f", score)}, direction=$direction, distance=$distance, borderline=$isBorderline"
+                    "Accepted: label=$label, score=${String.format("%.2f", score)}, direction=$direction, distance=$distance"
                 )
 
                 DetectedObstacle(
@@ -135,7 +139,7 @@ class ObjectDetectorHelper(
                     direction = direction,
                     distance = distance,
                     priority = priority,
-                    isBorderline = isBorderline,
+                    isBorderline = false,
                     boundingBox = RectF(box),
                     normalizedCenterX = normalizedCenterX,
                     timestampMs = System.currentTimeMillis()
@@ -158,7 +162,8 @@ class ObjectDetectorHelper(
 
     companion object {
         private const val TAG = "ObjectDetectorHelper"
-        const val DEFAULT_MODEL_NAME = "efficientdet_lite2.tflite"
+        const val DEFAULT_MODEL_NAME = "efficientdet_lite2_float32.tflite"
+        const val INT8_MODEL_NAME = "efficientdet_lite2.tflite"
         // Base low threshold passed to MediaPipe to allow sensitivity tuning in Kotlin
         const val BASE_DETECTOR_SCORE_THRESHOLD = 0.35f
     }

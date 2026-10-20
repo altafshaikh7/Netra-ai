@@ -7,8 +7,6 @@ import com.example.netraai.detection.Distance
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
-import org.junit.Assert.assertFalse
 import org.junit.Before
 import org.junit.Test
 
@@ -69,11 +67,27 @@ class AlertEngineTest {
     }
 
     @Test
+    fun testFarPersonIgnoredCompletely() {
+        val farPerson = DetectedObstacle(
+            label = "person",
+            confidence = 0.90f,
+            direction = Direction.AHEAD,
+            distance = Distance.FAR,
+            priority = AlertPriority.PRIORITY_2
+        )
+
+        val spoken = alertEngine.processObstacles(listOf(farPerson), language = "en")
+
+        assertNull("Far person detections must be ignored completely", spoken)
+        assertNull(spokenText)
+    }
+
+    @Test
     fun testPriority3SpokenWhenTtsIsIdle() {
         mockIsSpeaking = false // TTS is idle
         val chair = DetectedObstacle(
             label = "chair",
-            confidence = 0.7f,
+            confidence = 0.85f,
             direction = Direction.RIGHT,
             distance = Distance.FAR,
             priority = AlertPriority.PRIORITY_3
@@ -91,7 +105,7 @@ class AlertEngineTest {
         mockIsSpeaking = true // TTS is currently speaking
         val chair = DetectedObstacle(
             label = "chair",
-            confidence = 0.7f,
+            confidence = 0.85f,
             direction = Direction.RIGHT,
             distance = Distance.FAR,
             priority = AlertPriority.PRIORITY_3
@@ -122,44 +136,14 @@ class AlertEngineTest {
     @Test
     fun testMultipleObstaclesHighestPrioritySelected() {
         val chair = DetectedObstacle("chair", 0.9f, Direction.RIGHT, Distance.FAR, AlertPriority.PRIORITY_3)
-        val person = DetectedObstacle("person", 0.8f, Direction.LEFT, Distance.NEAR, AlertPriority.PRIORITY_2)
-        val bus = DetectedObstacle("bus", 0.75f, Direction.AHEAD, Distance.VERY_CLOSE, AlertPriority.PRIORITY_1)
+        val person = DetectedObstacle("person", 0.85f, Direction.LEFT, Distance.NEAR, AlertPriority.PRIORITY_2)
+        val bus = DetectedObstacle("bus", 0.80f, Direction.AHEAD, Distance.VERY_CLOSE, AlertPriority.PRIORITY_1)
 
-        // Pass in random order
         val spoken = alertEngine.processObstacles(listOf(chair, bus, person), language = "en")
 
         assertNotNull(spoken)
         assertEquals("bus", spoken?.label)
         assertEquals("Bus ahead, very close.", spokenText)
         assertEquals(true, wasInterrupted)
-    }
-
-    @Test
-    fun testBorderlineConfidencePhrasing() {
-        val borderlineCarEn = DetectedObstacle(
-            label = "car",
-            confidence = 0.58f,
-            direction = Direction.AHEAD,
-            distance = Distance.VERY_CLOSE,
-            priority = AlertPriority.PRIORITY_1,
-            isBorderline = true
-        )
-
-        alertEngine.processObstacles(listOf(borderlineCarEn), language = "en")
-        assertEquals("Maybe Car ahead, very close.", spokenText)
-
-        alertEngine.reset()
-
-        val borderlineCarHi = DetectedObstacle(
-            label = "car",
-            confidence = 0.58f,
-            direction = Direction.AHEAD,
-            distance = Distance.VERY_CLOSE,
-            priority = AlertPriority.PRIORITY_1,
-            isBorderline = true
-        )
-
-        alertEngine.processObstacles(listOf(borderlineCarHi), language = "hi")
-        assertEquals("शायद कार सामने, बहुत पास।", spokenText)
     }
 }
