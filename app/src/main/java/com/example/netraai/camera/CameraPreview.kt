@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageCapture
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -22,18 +23,14 @@ private const val TAG = "CameraPreview"
 
 /**
  * Composable that displays the CameraX live preview and binds optional ImageAnalysis for real-time
- * obstacle detection on a dedicated background executor.
- *
- * @param modifier Compose modifier.
- * @param analyzer Optional [ImageAnalysis.Analyzer] to attach for background frame processing.
- * @param onCameraBound Callback providing the bound [Camera] instance for torch/flashlight control.
- * @param onError Callback invoked when camera lifecycle binding fails, logging the error with [Log.e].
+ * obstacle detection on a dedicated background executor, plus ImageCapture for high quality photo capture.
  */
 @Composable
 fun CameraPreview(
     modifier: Modifier = Modifier,
     analyzer: ImageAnalysis.Analyzer? = null,
     onCameraBound: ((Camera) -> Unit)? = null,
+    onImageCaptureCreated: ((ImageCapture) -> Unit)? = null,
     onError: ((Throwable) -> Unit)? = null
 ) {
     val context = LocalContext.current
@@ -61,6 +58,12 @@ fun CameraPreview(
                     val preview = Preview.Builder().build().also {
                         it.setSurfaceProvider(previewView.surfaceProvider)
                     }
+                    val imageCapture = ImageCapture.Builder()
+                        .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                        .build()
+
+                    onImageCaptureCreated?.invoke(imageCapture)
+
                     val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
                     cameraProvider.unbindAll()
@@ -75,13 +78,15 @@ fun CameraPreview(
                             lifecycleOwner,
                             cameraSelector,
                             preview,
-                            imageAnalysis
+                            imageAnalysis,
+                            imageCapture
                         )
                     } else {
                         cameraProvider.bindToLifecycle(
                             lifecycleOwner,
                             cameraSelector,
-                            preview
+                            preview,
+                            imageCapture
                         )
                     }
                     onCameraBound?.invoke(camera)

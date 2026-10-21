@@ -44,7 +44,7 @@ class PreferencesManager(private val context: Context) {
     }
 
     val speechSpeedFlow: Flow<Float> = context.dataStore.data.map { preferences ->
-        preferences[KEY_SPEECH_SPEED] ?: 1.0f
+        preferences[KEY_SPEECH_SPEED] ?: 0.85f
     }
 
     val flashlightModeFlow: Flow<FlashlightMode> = context.dataStore.data.map { preferences ->

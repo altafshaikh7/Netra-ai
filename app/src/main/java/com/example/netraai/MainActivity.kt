@@ -118,6 +118,7 @@ class MainActivity : ComponentActivity() {
     private val textReader = TextReader()
 
     private var cameraControl: androidx.camera.core.CameraControl? = null
+    private var imageCapture: androidx.camera.core.ImageCapture? = null
     private var hasFlashUnit: Boolean = false
     private var hasWarnedNoFlash: Boolean = false
 
@@ -295,52 +296,6 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        walkingModeAnalyzer.onTextScanned = { bitmap, rotationDegrees ->
-            lifecycleScope.launch(Dispatchers.IO) {
-                try {
-                    val recognizedText = textReader.readText(bitmap, rotationDegrees)
-                    withContext(Dispatchers.Main) {
-                        if (recognizedText.isBlank()) {
-                            isReadingActive = false
-                            val msg = if (currentLanguage == "hi") "कोई पाठ नहीं मिला, पास आएं और स्थिर रहें।" else "No text found, move closer and hold steady."
-                            ttsManager.speak(msg, interrupt = true)
-                        } else {
-                            val useHindiVoice = isMostlyDevanagari(recognizedText)
-                            if (useHindiVoice) {
-                                ttsManager.setLanguage("hi")
-                            } else {
-                                ttsManager.setLanguage("en")
-                            }
-
-                            val maxLength = ttsManager.maxSpeechInputLength.coerceAtMost(200)
-                            val chunks = TextReader.splitTextIntoChunks(recognizedText, maxChunkLength = maxLength)
-                            for (i in chunks.indices) {
-                                val chunk = chunks[i].trim()
-                                val isLast = (i == chunks.size - 1)
-                                if (isLast) {
-                                    ttsManager.speak(chunk, interrupt = (i == 0), utteranceId = "last_utterance", onDone = {
-                                        runOnUiThread {
-                                            ttsManager.setLanguage(currentLanguage)
-                                            isReadingActive = false
-                                        }
-                                    })
-                                } else {
-                                    ttsManager.speak(chunk, interrupt = (i == 0), utteranceId = "chunk_$i")
-                                }
-                            }
-                        }
-                    }
-                } catch (_: Exception) {
-                    withContext(Dispatchers.Main) {
-                        ttsManager.setLanguage(currentLanguage)
-                        isReadingActive = false
-                        val msg = if (currentLanguage == "hi") "पाठ पढ़ने में त्रुटि।" else "Error reading text."
-                        ttsManager.speak(msg, interrupt = true)
-                    }
-                }
-            }
-        }
-
         checkPermissions()
 
         lifecycleScope.launch {
@@ -399,20 +354,21 @@ class MainActivity : ComponentActivity() {
         setContent {
             NetraAITheme {
                 val currentLanguageState by preferencesManager.languageFlow.collectAsState(initial = "en")
-                val speechSpeedState by preferencesManager.speechSpeedFlow.collectAsState(initial = 1.0f)
+                val speechSpeedState by preferencesManager.speechSpeedFlow.collectAsState(initial = 0.85f)
                 val flashlightModeState by preferencesManager.flashlightModeFlow.collectAsState(initial = FlashlightMode.AUTO)
                 val isDebugOverlayState by preferencesManager.debugOverlayFlow.collectAsState(initial = false)
                 val sensitivityState by preferencesManager.detectionSensitivityFlow.collectAsState(initial = DetectionSensitivity.NORMAL)
                 val isDisclaimerDismissedState by preferencesManager.isDisclaimerDismissedFlow.collectAsState(initial = false)
 
                 val localView = LocalView.current
+                val activityContext = this@MainActivity
 
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = DarkBackground
                 ) {
                     Box(modifier = Modifier.fillMaxSize()) {
-                        // 1. Fullscreen Camera Preview
+                        // 1. Fullscreen Camera Preview with ImageCapture
                         if (hasPermissions) {
                             CameraPreview(
                                 modifier = Modifier.fillMaxSize(),
@@ -420,6 +376,9 @@ class MainActivity : ComponentActivity() {
                                 onCameraBound = { camera ->
                                     cameraControl = camera.cameraControl
                                     hasFlashUnit = camera.cameraInfo.hasFlashUnit()
+                                },
+                                onImageCaptureCreated = { capture ->
+                                    imageCapture = capture
                                 },
                                 onError = {
                                     val err = if (currentLanguageState == "hi") "कैमरा अनुपलब्ध है।" else "Camera unavailable."
@@ -572,7 +531,78 @@ class MainActivity : ComponentActivity() {
                                             isReadingActive = true
                                             val readingMsg = if (currentLanguageState == "hi") "पढ़ रहे हैं" else "Reading"
                                             ttsManager.speak(readingMsg, interrupt = true)
-                                            walkingModeAnalyzer.readTextRequested = true
+
+                                            val capture = imageCapture
+                                            if (capture != null) {
+                                                val photoFile = java.io.File.createTempFile("ocr_capture", ".jpg", cacheDir)
+                                                val outputOptions = androidx.camera.core.ImageCapture.OutputFileOptions.Builder(photoFile).build()
+                                                capture.takePicture(
+                                                    outputOptions,
+                                                    ContextCompat.getMainExecutor(activityContext),
+                                                    object : androidx.camera.core.ImageCapture.OnImageSavedCallback {
+                                                        override fun onImageSaved(outputFileResults: androidx.camera.core.ImageCapture.OutputFileResults) {
+                                                            lifecycleScope.launch(Dispatchers.IO) {
+                                                                try {
+                                                                    val bitmap = android.graphics.BitmapFactory.decodeFile(photoFile.absolutePath)
+                                                                    val recognizedText = if (bitmap != null) textReader.readText(bitmap, 0) else ""
+                                                                    photoFile.delete()
+
+                                                                    withContext(Dispatchers.Main) {
+                                                                        val isValid = recognizedText.length >= 3 && recognizedText.any { it.isLetterOrDigit() }
+                                                                        if (!isValid) {
+                                                                            isReadingActive = false
+                                                                            val retryMsg = if (currentLanguage == "hi") "फोन को थोड़ा पास या दूर ले जाएं, स्थिर रखें" else "Move phone a little closer or further, hold steady"
+                                                                            ttsManager.speak(retryMsg, interrupt = true)
+                                                                        } else {
+                                                                            val useHindiVoice = isMostlyDevanagari(recognizedText)
+                                                                            if (useHindiVoice) {
+                                                                                ttsManager.setLanguage("hi")
+                                                                            } else {
+                                                                                ttsManager.setLanguage("en")
+                                                                            }
+
+                                                                            val maxLength = ttsManager.maxSpeechInputLength.coerceAtMost(200)
+                                                                            val chunks = TextReader.splitTextIntoChunks(recognizedText, maxChunkLength = maxLength)
+                                                                            for (i in chunks.indices) {
+                                                                                val chunk = chunks[i].trim()
+                                                                                val isLast = (i == chunks.size - 1)
+                                                                                if (isLast) {
+                                                                                    ttsManager.speak(chunk, interrupt = false, utteranceId = "last_utterance", onDone = {
+                                                                                        runOnUiThread {
+                                                                                            ttsManager.setLanguage(currentLanguage)
+                                                                                            isReadingActive = false
+                                                                                        }
+                                                                                    })
+                                                                                } else {
+                                                                                    ttsManager.speak(chunk, interrupt = false, utteranceId = "chunk_$i")
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                } catch (_: Exception) {
+                                                                    photoFile.delete()
+                                                                    withContext(Dispatchers.Main) {
+                                                                        ttsManager.setLanguage(currentLanguage)
+                                                                        isReadingActive = false
+                                                                        val errMsg = if (currentLanguage == "hi") "पाठ पढ़ने में त्रुटि।" else "Error reading text."
+                                                                        ttsManager.speak(errMsg, interrupt = true)
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+
+                                                        override fun onError(exception: androidx.camera.core.ImageCaptureException) {
+                                                            isReadingActive = false
+                                                            val errMsg = if (currentLanguage == "hi") "पाठ पढ़ने में त्रुटि।" else "Error reading text."
+                                                            ttsManager.speak(errMsg, interrupt = true)
+                                                        }
+                                                    }
+                                                )
+                                            } else {
+                                                isReadingActive = false
+                                                val errMsg = if (currentLanguageState == "hi") "कैमरा तैयार नहीं है।" else "Camera not ready."
+                                                ttsManager.speak(errMsg, interrupt = true)
+                                            }
                                         }
                                     },
                                     onCycleFlashlight = {
