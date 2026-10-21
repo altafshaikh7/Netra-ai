@@ -21,6 +21,17 @@ class DistanceMetersEstimator(
     private val activeTracks = mutableListOf<TrackedObject>()
     private var frameCounter = 0
     private var nextId = 1
+    private val matchedTrackIdsThisFrame = mutableSetOf<String>()
+
+    /**
+     * Increments frame counter once per frame and expires old tracks not seen for maxMissedFrames.
+     */
+    @Synchronized
+    fun beginFrame() {
+        frameCounter++
+        matchedTrackIdsThisFrame.clear()
+        activeTracks.removeAll { (frameCounter - it.lastSeenFrame) >= maxMissedFrames }
+    }
 
     companion object {
         val REAL_HEIGHTS_METERS = mapOf(
@@ -72,13 +83,14 @@ class DistanceMetersEstimator(
         val boxH = boxHeightPixels.coerceAtLeast(1f)
         if (focalLengthPixels <= 0f) return Pair(null, "")
 
-        frameCounter++
-
         var matchedTrack: TrackedObject? = null
-        var bestScore = 0f
+        var bestScore = -1f
 
+        // A track may match at most one detection per frame; prefer closest center match
         for (track in activeTracks) {
             if (!track.label.equals(label, ignoreCase = true)) continue
+            if (track.trackId in matchedTrackIdsThisFrame) continue
+
             val centerDist = abs(track.centerX - centerX) + abs(track.centerY - centerY)
             val maxDim = max(track.boxHeight, boxH).coerceAtLeast(1f)
             val normalizedDist = centerDist / maxDim
@@ -111,7 +123,7 @@ class DistanceMetersEstimator(
             newTrack
         }
 
-        activeTracks.removeAll { (frameCounter - it.lastSeenFrame) >= maxMissedFrames }
+        matchedTrackIdsThisFrame.add(track.trackId)
 
         val rawMeters = (realHeight * focalLengthPixels) / boxH * calibrationMultiplier
 
@@ -131,5 +143,6 @@ class DistanceMetersEstimator(
         activeTracks.clear()
         frameCounter = 0
         nextId = 1
+        matchedTrackIdsThisFrame.clear()
     }
 }

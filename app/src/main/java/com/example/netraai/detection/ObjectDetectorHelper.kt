@@ -143,6 +143,10 @@ class ObjectDetectorHelper(
         val frameArea = uprightWidth * uprightHeight
 
         val focalLengthPixels = getFocalLengthPixels(uprightWidth, uprightHeight)
+        val TRUNCATION_MARGIN = 0.02f
+
+        // Call beginFrame ONCE per detect() before the detection loop
+        distanceMetersEstimator.beginFrame()
 
         val startTime = System.currentTimeMillis()
 
@@ -180,14 +184,24 @@ class ObjectDetectorHelper(
                 val distance = distanceEstimator.estimateDistance(label, direction, areaRatio)
 
                 val boxHeightPixels = box.height().coerceAtLeast(1f)
-                val (distanceMeters, _) = distanceMetersEstimator.estimateDistance(
-                    label = label,
-                    boxHeightPixels = boxHeightPixels,
-                    focalLengthPixels = focalLengthPixels,
-                    calibrationMultiplier = calibrationMultiplier,
-                    centerX = box.centerX(),
-                    centerY = box.centerY()
-                )
+
+                // Truncated boxes check (within 2% margin of top or bottom edge)
+                val touchesTopOrBottom = box.top <= uprightHeight * TRUNCATION_MARGIN || box.bottom >= uprightHeight * (1f - TRUNCATION_MARGIN)
+
+                val (distanceMeters, _) = if (touchesTopOrBottom) {
+                    Pair(null, "")
+                } else {
+                    distanceMetersEstimator.estimateDistance(
+                        label = label,
+                        boxHeightPixels = boxHeightPixels,
+                        focalLengthPixels = focalLengthPixels,
+                        calibrationMultiplier = calibrationMultiplier,
+                        centerX = box.centerX(),
+                        centerY = box.centerY()
+                    )
+                }
+
+                val finalDistance = if (touchesTopOrBottom && distance == Distance.FAR) Distance.NEAR else distance
 
                 val realHeight = DistanceMetersEstimator.getRealHeight(label)
                 val rawMeters = if (realHeight != null && boxHeightPixels > 0f) (realHeight * focalLengthPixels) / boxHeightPixels * calibrationMultiplier else 0f
@@ -195,21 +209,21 @@ class ObjectDetectorHelper(
                 // Requirement 4: Logging at Log.d tag "NetraDist"
                 Log.d(
                     "NetraDist",
-                    "label=$label, boxHeight=$boxHeightPixels, focalPx=$focalLengthPixels, rawMeters=$rawMeters, smoothedMeters=$distanceMeters"
+                    "label=$label, boxHeight=$boxHeightPixels, focalPx=$focalLengthPixels, rawMeters=$rawMeters, smoothedMeters=$distanceMeters, truncated=$touchesTopOrBottom"
                 )
 
                 val priority = AlertPriority.fromLabel(label)
 
                 Log.d(
                     "NetraDetection",
-                    "Accepted: label=$label, score=${String.format("%.2f", score)}, direction=$direction, distance=$distance, distanceMeters=$distanceMeters"
+                    "Accepted: label=$label, score=${String.format("%.2f", score)}, direction=$direction, distance=$finalDistance, distanceMeters=$distanceMeters"
                 )
 
                 DetectedObstacle(
                     label = label,
                     confidence = score,
                     direction = direction,
-                    distance = distance,
+                    distance = finalDistance,
                     priority = priority,
                     isBorderline = false,
                     boundingBox = RectF(box),
