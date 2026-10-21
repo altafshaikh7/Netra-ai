@@ -12,15 +12,17 @@ import com.google.mediapipe.tasks.core.Delegate
 import com.google.mediapipe.tasks.vision.core.ImageProcessingOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.objectdetector.ObjectDetector
+import kotlin.math.abs
 
 /**
  * Helper class wrapping MediaPipe Tasks Vision ObjectDetector with float32 EfficientDet-Lite2 model
- * (with INT8 model switchable via constant), GPU acceleration with CPU fallback, Camera2 focal length estimation, and strict filtering.
+ * (with INT8 model switchable via constant), GPU acceleration with CPU fallback, precise Camera2 focal length selection, and strict filtering.
  */
 class ObjectDetectorHelper(
     context: Context,
     modelAssetName: String = DEFAULT_MODEL_NAME,
     var sensitivity: DetectionSensitivity = DetectionSensitivity.NORMAL,
+    var calibrationMultiplier: Float = 1.0f,
     val distanceEstimator: DistanceEstimator = DistanceEstimator()
 ) {
     private val appContext = context.applicationContext
@@ -76,18 +78,42 @@ class ObjectDetectorHelper(
         }
     }
 
-    private fun getFocalLengthPixels(uprightHeight: Float): Float {
+    private fun getFocalLengthPixels(uprightWidth: Float, uprightHeight: Float): Float {
         if (cachedFocalLengthPixels > 0f) return cachedFocalLengthPixels
         cachedFocalLengthPixels = try {
             val manager = appContext.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
-            val camId = manager?.cameraIdList?.firstOrNull() ?: return uprightHeight * 1.2f
-            val chars = manager.getCameraCharacteristics(camId)
-            val focalLengths = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
-            val sensorSize = chars.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
-            val focalMm = focalLengths?.firstOrNull() ?: 4.0f
-            val sensorH = sensorSize?.height ?: 5.0f
-            if (sensorH > 0f && focalMm > 0f) {
-                (focalMm / sensorH) * uprightHeight
+            if (manager != null) {
+                var bestCameraId: String? = null
+                var bestFocalDiff = Float.MAX_VALUE
+                val standardMainCameraFocalMm = 4.2f // Typical main camera focal length
+
+                for (id in manager.cameraIdList) {
+                    val chars = manager.getCameraCharacteristics(id)
+                    val lensFacing = chars.get(CameraCharacteristics.LENS_FACING)
+                    if (lensFacing == CameraCharacteristics.LENS_FACING_BACK) {
+                        val focalLengths = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                        val focalMm = focalLengths?.firstOrNull() ?: continue
+                        val diff = abs(focalMm - standardMainCameraFocalMm)
+                        if (diff < bestFocalDiff) {
+                            bestFocalDiff = diff
+                            bestCameraId = id
+                        }
+                    }
+                }
+
+                val targetId = bestCameraId ?: manager.cameraIdList.firstOrNull()
+                if (targetId != null) {
+                    val chars = manager.getCameraCharacteristics(targetId)
+                    val focalLengths = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                    val sensorSize = chars.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+                    val focalMm = focalLengths?.firstOrNull() ?: 4.0f
+                    val sensorWidth = sensorSize?.width ?: 6.4f
+                    val sensorHeight = sensorSize?.height ?: 4.8f
+
+                    DistanceMetersEstimator.computeFocalPixels(focalMm, sensorWidth, sensorHeight, uprightWidth, uprightHeight)
+                } else {
+                    uprightHeight * 1.2f
+                }
             } else {
                 uprightHeight * 1.2f
             }
@@ -116,7 +142,7 @@ class ObjectDetectorHelper(
         val uprightHeight = if (isRotatedSideways) rawWidth else rawHeight
         val frameArea = uprightWidth * uprightHeight
 
-        val focalLengthPixels = getFocalLengthPixels(uprightHeight)
+        val focalLengthPixels = getFocalLengthPixels(uprightWidth, uprightHeight)
 
         val startTime = System.currentTimeMillis()
 
@@ -154,7 +180,23 @@ class ObjectDetectorHelper(
                 val distance = distanceEstimator.estimateDistance(label, direction, areaRatio)
 
                 val boxHeightPixels = box.height().coerceAtLeast(1f)
-                val distanceMeters = distanceMetersEstimator.estimateDistance(label, boxHeightPixels, focalLengthPixels)
+                val (distanceMeters, _) = distanceMetersEstimator.estimateDistance(
+                    label = label,
+                    boxHeightPixels = boxHeightPixels,
+                    focalLengthPixels = focalLengthPixels,
+                    calibrationMultiplier = calibrationMultiplier,
+                    centerX = box.centerX(),
+                    centerY = box.centerY()
+                )
+
+                val realHeight = DistanceMetersEstimator.getRealHeight(label)
+                val rawMeters = if (realHeight != null && boxHeightPixels > 0f) (realHeight * focalLengthPixels) / boxHeightPixels * calibrationMultiplier else 0f
+
+                // Requirement 4: Logging at Log.d tag "NetraDist"
+                Log.d(
+                    "NetraDist",
+                    "label=$label, boxHeight=$boxHeightPixels, focalPx=$focalLengthPixels, rawMeters=$rawMeters, smoothedMeters=$distanceMeters"
+                )
 
                 val priority = AlertPriority.fromLabel(label)
 

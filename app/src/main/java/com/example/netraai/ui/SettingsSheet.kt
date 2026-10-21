@@ -51,11 +51,13 @@ fun SettingsSheet(
     flashlightMode: FlashlightMode,
     isDebugOverlayEnabled: Boolean,
     detectionSensitivity: DetectionSensitivity,
+    distanceCalibration: Float,
     onLanguageChange: (String) -> Unit,
     onSpeechSpeedChange: (Float) -> Unit,
     onFlashlightModeChange: (FlashlightMode) -> Unit,
     onDebugOverlayChange: (Boolean) -> Unit,
     onDetectionSensitivityChange: (DetectionSensitivity) -> Unit,
+    onDistanceCalibrationChange: (Float) -> Unit,
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -148,7 +150,7 @@ fun SettingsSheet(
                         .weight(1f)
                         .height(56.dp)
                         .semantics {
-                            contentDescription = "हिंदी भाषा चुनें"
+                            contentDescription = "Select Hindi language"
                         }
                 ) {
                     Text(
@@ -162,21 +164,19 @@ fun SettingsSheet(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // 2. Speech Rate Slider
+            // 2. Speech Speed Slider
             Text(
-                text = if (isHindi) "बोलने की गति: ${String.format("%.1fx", speechSpeed)}" else "Speech Speed: ${String.format("%.1fx", speechSpeed)}",
+                text = if (isHindi) "वाक् गति (Speech Speed: ${String.format("%.1fx", speechSpeed)})" else "Speech Speed (${String.format("%.1fx", speechSpeed)})",
                 color = TextSecondary,
                 fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.semantics {
-                    contentDescription = if (isHindi) "बोलने की गति ${String.format("%.1fx", speechSpeed)}" else "Speech speed ${String.format("%.1fx", speechSpeed)}"
-                }
+                fontWeight = FontWeight.SemiBold
             )
+            Spacer(modifier = Modifier.height(8.dp))
             Slider(
                 value = speechSpeed,
                 onValueChange = onSpeechSpeedChange,
-                valueRange = 0.75f..1.5f,
-                steps = 2,
+                valueRange = 0.5f..2.0f,
+                steps = 15,
                 colors = SliderDefaults.colors(
                     thumbColor = ElectricCyan,
                     activeTrackColor = ElectricCyan,
@@ -277,7 +277,34 @@ fun SettingsSheet(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // 5. Debug Overlay Switch
+            // 5. Distance Calibration Multiplier Slider
+            Text(
+                text = if (isHindi) "दूरी अंशांकन (Distance Calibration: ${String.format("%.2fx", distanceCalibration)})" else "Distance Calibration (${String.format("%.2fx", distanceCalibration)})",
+                color = TextSecondary,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Slider(
+                value = distanceCalibration,
+                onValueChange = onDistanceCalibrationChange,
+                valueRange = 0.5f..2.0f,
+                steps = 14,
+                colors = SliderDefaults.colors(
+                    thumbColor = ElectricCyan,
+                    activeTrackColor = ElectricCyan,
+                    inactiveTrackColor = DarkCard
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics {
+                        contentDescription = "Distance calibration multiplier slider, currently ${String.format("%.2fx", distanceCalibration)}"
+                    }
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // 6. Debug Overlay Switch
             Row(
                 modifier = Modifier
                     .fillMaxWidth()

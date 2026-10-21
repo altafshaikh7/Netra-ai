@@ -29,6 +29,7 @@ class PreferencesManager(private val context: Context) {
         val KEY_FLASHLIGHT_MODE = stringPreferencesKey("flashlight_mode")
         val KEY_DEBUG_OVERLAY = booleanPreferencesKey("debug_overlay")
         val KEY_DETECTION_SENSITIVITY = stringPreferencesKey("detection_sensitivity")
+        val KEY_DISTANCE_CALIBRATION = floatPreferencesKey("distance_calibration")
     }
 
     val isFirstLaunchFlow: Flow<Boolean> = context.dataStore.data.map { preferences ->
@@ -59,6 +60,10 @@ class PreferencesManager(private val context: Context) {
         DetectionSensitivity.fromString(preferences[KEY_DETECTION_SENSITIVITY] ?: "NORMAL")
     }
 
+    val distanceCalibrationFlow: Flow<Float> = context.dataStore.data.map { preferences ->
+        preferences[KEY_DISTANCE_CALIBRATION] ?: 1.0f
+    }
+
     suspend fun isFirstLaunch(): Boolean = isFirstLaunchFlow.first()
 
     suspend fun setFirstLaunchCompleted() {
@@ -87,5 +92,9 @@ class PreferencesManager(private val context: Context) {
 
     suspend fun setDetectionSensitivity(sensitivity: DetectionSensitivity) {
         context.dataStore.edit { it[KEY_DETECTION_SENSITIVITY] = sensitivity.name }
+    }
+
+    suspend fun setDistanceCalibration(multiplier: Float) {
+        context.dataStore.edit { it[KEY_DISTANCE_CALIBRATION] = multiplier.coerceIn(0.5f, 2.0f) }
     }
 }

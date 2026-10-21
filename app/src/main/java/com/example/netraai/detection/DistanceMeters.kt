@@ -1,11 +1,26 @@
 package com.example.netraai.detection
 
+import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.round
 
+data class TrackedObject(
+    val trackId: String,
+    val label: String,
+    var boxHeight: Float,
+    var centerX: Float,
+    var centerY: Float,
+    var lastSeenFrame: Int,
+    val history: ArrayDeque<Float> = ArrayDeque()
+)
+
 class DistanceMetersEstimator(
-    val windowSize: Int = 5
+    val windowSize: Int = 5,
+    val maxMissedFrames: Int = 5
 ) {
-    private val historyMap = mutableMapOf<String, ArrayDeque<Float>>()
+    private val activeTracks = mutableListOf<TrackedObject>()
+    private var frameCounter = 0
+    private var nextId = 1
 
     companion object {
         val REAL_HEIGHTS_METERS = mapOf(
@@ -29,6 +44,19 @@ class DistanceMetersEstimator(
         fun roundToNearestHalfMeter(meters: Float): Float {
             return round(meters * 2f) / 2f
         }
+
+        /**
+         * Computes focal length in pixels for the vertical axis of an upright portrait frame.
+         * Formula: focalPx = (focalLengthMm / sensorLongSideMm) * frameLongSide
+         * Explanation: For an upright portrait frame (height > width), the vertical axis aligns with
+         * the frame's long side, mapping to the sensor's long physical dimension.
+         */
+        fun computeFocalPixels(focalLengthMm: Float, sensorWidthMm: Float, sensorHeightMm: Float, frameWidth: Float, frameHeight: Float): Float {
+            val sensorLongSide = max(sensorWidthMm, sensorHeightMm)
+            val frameLongSide = max(frameWidth, frameHeight)
+            if (sensorLongSide <= 0f || frameLongSide <= 0f) return frameHeight * 1.2f
+            return (focalLengthMm / sensorLongSide) * frameLongSide
+        }
     }
 
     @Synchronized
@@ -36,27 +64,72 @@ class DistanceMetersEstimator(
         label: String,
         boxHeightPixels: Float,
         focalLengthPixels: Float,
-        trackKey: String = label
-    ): Float? {
-        val realHeight = getRealHeight(label) ?: return null
-        if (boxHeightPixels <= 0f || focalLengthPixels <= 0f) return null
+        calibrationMultiplier: Float = 1.0f,
+        centerX: Float = 0f,
+        centerY: Float = 0f
+    ): Pair<Float?, String> {
+        val realHeight = getRealHeight(label) ?: return Pair(null, "")
+        val boxH = boxHeightPixels.coerceAtLeast(1f)
+        if (focalLengthPixels <= 0f) return Pair(null, "")
 
-        val rawMeters = (realHeight * focalLengthPixels) / boxHeightPixels
+        frameCounter++
 
-        val history = historyMap.getOrPut(trackKey) { ArrayDeque() }
-        history.addLast(rawMeters)
-        while (history.size > windowSize) {
-            history.removeFirst()
+        var matchedTrack: TrackedObject? = null
+        var bestScore = 0f
+
+        for (track in activeTracks) {
+            if (!track.label.equals(label, ignoreCase = true)) continue
+            val centerDist = abs(track.centerX - centerX) + abs(track.centerY - centerY)
+            val maxDim = max(track.boxHeight, boxH).coerceAtLeast(1f)
+            val normalizedDist = centerDist / maxDim
+
+            if (normalizedDist <= 0.5f) {
+                val score = 1f - normalizedDist.coerceIn(0f, 1f)
+                if (score > bestScore) {
+                    bestScore = score
+                    matchedTrack = track
+                }
+            }
         }
 
-        val sorted = history.sorted()
+        val track = if (matchedTrack != null) {
+            matchedTrack.boxHeight = boxH
+            matchedTrack.centerX = centerX
+            matchedTrack.centerY = centerY
+            matchedTrack.lastSeenFrame = frameCounter
+            matchedTrack
+        } else {
+            val newTrack = TrackedObject(
+                trackId = "${label}_${nextId++}",
+                label = label,
+                boxHeight = boxH,
+                centerX = centerX,
+                centerY = centerY,
+                lastSeenFrame = frameCounter
+            )
+            activeTracks.add(newTrack)
+            newTrack
+        }
+
+        activeTracks.removeAll { (frameCounter - it.lastSeenFrame) >= maxMissedFrames }
+
+        val rawMeters = (realHeight * focalLengthPixels) / boxH * calibrationMultiplier
+
+        track.history.addLast(rawMeters)
+        while (track.history.size > windowSize) {
+            track.history.removeFirst()
+        }
+
+        val sorted = track.history.sorted()
         val medianMeters = sorted[sorted.size / 2]
 
-        return roundToNearestHalfMeter(medianMeters)
+        return Pair(roundToNearestHalfMeter(medianMeters), track.trackId)
     }
 
     @Synchronized
     fun reset() {
-        historyMap.clear()
+        activeTracks.clear()
+        frameCounter = 0
+        nextId = 1
     }
 }

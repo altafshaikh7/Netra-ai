@@ -326,6 +326,12 @@ class MainActivity : ComponentActivity() {
         }
 
         lifecycleScope.launch {
+            preferencesManager.distanceCalibrationFlow.collect { multiplier ->
+                detectorHelper.calibrationMultiplier = multiplier
+            }
+        }
+
+        lifecycleScope.launch {
             val isFirst = preferencesManager.isFirstLaunch()
             val greeting = if (isFirst) {
                 preferencesManager.setFirstLaunchCompleted()
@@ -358,6 +364,7 @@ class MainActivity : ComponentActivity() {
                 val flashlightModeState by preferencesManager.flashlightModeFlow.collectAsState(initial = FlashlightMode.AUTO)
                 val isDebugOverlayState by preferencesManager.debugOverlayFlow.collectAsState(initial = false)
                 val sensitivityState by preferencesManager.detectionSensitivityFlow.collectAsState(initial = DetectionSensitivity.NORMAL)
+                val distanceCalibrationState by preferencesManager.distanceCalibrationFlow.collectAsState(initial = 1.0f)
                 val isDisclaimerDismissedState by preferencesManager.isDisclaimerDismissedFlow.collectAsState(initial = false)
 
                 val localView = LocalView.current
@@ -662,6 +669,7 @@ class MainActivity : ComponentActivity() {
                                 flashlightMode = flashlightModeState,
                                 isDebugOverlayEnabled = isDebugOverlayState,
                                 detectionSensitivity = sensitivityState,
+                                distanceCalibration = distanceCalibrationState,
                                 onLanguageChange = { lang ->
                                     lifecycleScope.launch { preferencesManager.setLanguage(lang) }
                                 },
@@ -683,6 +691,9 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onDetectionSensitivityChange = { sens ->
                                     lifecycleScope.launch { preferencesManager.setDetectionSensitivity(sens) }
+                                },
+                                onDistanceCalibrationChange = { mult ->
+                                    lifecycleScope.launch { preferencesManager.setDistanceCalibration(mult) }
                                 },
                                 onDismiss = { showSettingsSheet = false }
                             )
