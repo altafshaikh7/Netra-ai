@@ -1,6 +1,7 @@
 package com.example.netraai.detection
 
 import android.graphics.RectF
+import android.util.Log
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -58,13 +59,23 @@ class TemporalTracker(
 
             // Must appear in at least minConfirmations out of windowSize frames
             if (matchingHits.size < minConfirmations) {
+                try {
+                    Log.d("NetraWhy", "UNCONFIRMED ${matchingHits.size}/$minConfirmations for label=${candidate.label}")
+                } catch (_: Exception) {}
                 return@filter false
             }
 
             // Must satisfy average score >= threshold
             val avgScore = matchingHits.map { it.confidence }.average().toFloat()
             val threshold = DetectionFilter.getThreshold(candidate.label, sensitivity)
-            avgScore >= threshold
+            if (avgScore < threshold) {
+                try {
+                    Log.d("NetraWhy", "UNCONFIRMED_SCORE avgScore=$avgScore < threshold=$threshold for label=${candidate.label}")
+                } catch (_: Exception) {}
+                return@filter false
+            }
+
+            true
         }
     }
 

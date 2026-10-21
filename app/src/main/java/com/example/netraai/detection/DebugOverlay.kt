@@ -33,7 +33,8 @@ fun DebugOverlay(
     modifier: Modifier = Modifier,
     gateStatus: GateStatus = GateStatus.ACTIVE,
     angularSpeed: Float = 0f,
-    sharpnessScore: Float = 0f
+    sharpnessScore: Float = 0f,
+    lastWhyReason: String = ""
 ) {
     Box(modifier = modifier.fillMaxSize()) {
         if (uprightWidth > 0 && uprightHeight > 0) {
@@ -103,6 +104,13 @@ fun DebugOverlay(
                     color = if (gateStatus.isPaused) Color(0xFFFFD600) else Color(0xFF00E676),
                     fontSize = 11.sp
                 )
+                if (lastWhyReason.isNotEmpty()) {
+                    Text(
+                        text = "Why: $lastWhyReason",
+                        color = Color(0xFFFF5252),
+                        fontSize = 11.sp
+                    )
+                }
             }
         }
     }

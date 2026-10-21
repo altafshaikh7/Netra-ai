@@ -2,6 +2,8 @@ package com.example.netraai.detection
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -56,6 +58,21 @@ class DetectionFilterTest {
         // Low sensitivity raises threshold
         assertEquals(0.80f, DetectionFilter.getThreshold("car", DetectionSensitivity.LOW), 0.001f)
         assertEquals(0.85f, DetectionFilter.getThreshold("person", DetectionSensitivity.LOW), 0.001f)
+    }
+
+    @Test
+    fun testRejectReasonFunction() {
+        // Not whitelisted
+        assertEquals("NOT_WHITELISTED", DetectionFilter.rejectReason("cat", 0.95f, 0f, 0f, 100f, 100f, 1000f, 1000f))
+
+        // Below threshold
+        assertNotNull(DetectionFilter.rejectReason("person", 0.70f, 0f, 0f, 300f, 300f, 1000f, 1000f))
+
+        // Too small (area ratio < 0.02)
+        assertEquals("TOO_SMALL", DetectionFilter.rejectReason("person", 0.90f, 0f, 0f, 10f, 10f, 1000f, 1000f))
+
+        // Accepted -> null
+        assertNull(DetectionFilter.rejectReason("person", 0.90f, 200f, 200f, 500f, 500f, 1000f, 1000f))
     }
 
     @Test

@@ -141,6 +141,7 @@ class MainActivity : ComponentActivity() {
     private var debugGateStatus by mutableStateOf(GateStatus.ACTIVE)
     private var debugAngularSpeed by mutableFloatStateOf(0f)
     private var debugSharpnessScore by mutableFloatStateOf(0f)
+    private var debugWhyReason by mutableStateOf("")
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -254,6 +255,13 @@ class MainActivity : ComponentActivity() {
         alertEngine = AlertEngine(ttsManager)
         detectorHelper = ObjectDetectorHelper(this)
 
+        detectorHelper.onWhyLogged = { reason ->
+            runOnUiThread { debugWhyReason = reason }
+        }
+        alertEngine.onWhyLogged = { reason ->
+            runOnUiThread { debugWhyReason = reason }
+        }
+
         walkingModeAnalyzer = WalkingModeAnalyzer(
             detectorHelper = detectorHelper,
             onLumaSampled = { luma ->
@@ -267,11 +275,19 @@ class MainActivity : ComponentActivity() {
                 }
             },
             onAnalysisComplete = { confirmed, rawAccepted, fps, infMs, uprightW, uprightH, gateState, speed, sharpness ->
-                if (isWalkingModeActive && gateState == GateStatus.ACTIVE && !isReadingActive) {
-                    lifecycleScope.launch {
-                        val spoken = alertEngine.processObstacles(confirmed, currentLanguage)
-                        if (spoken != null && spoken.priority == AlertPriority.PRIORITY_1) {
-                            triggerDangerHaptic()
+                if (isWalkingModeActive) {
+                    if (isReadingActive) {
+                        android.util.Log.d("NetraWhy", "Skipped alert: REASON=READING_ACTIVE")
+                        runOnUiThread { debugWhyReason = "READING_ACTIVE" }
+                    } else if (gateState.isPaused) {
+                        android.util.Log.d("NetraWhy", "Skipped alert: REASON=GATE_PAUSED")
+                        runOnUiThread { debugWhyReason = "GATE_PAUSED" }
+                    } else if (gateState == GateStatus.ACTIVE && !isReadingActive) {
+                        lifecycleScope.launch {
+                            val spoken = alertEngine.processObstacles(confirmed, currentLanguage)
+                            if (spoken != null && spoken.priority == AlertPriority.PRIORITY_1) {
+                                triggerDangerHaptic()
+                            }
                         }
                     }
                 }
@@ -404,7 +420,8 @@ class MainActivity : ComponentActivity() {
                                 uprightHeight = debugUprightHeight,
                                 gateStatus = debugGateStatus,
                                 angularSpeed = debugAngularSpeed,
-                                sharpnessScore = debugSharpnessScore
+                                sharpnessScore = debugSharpnessScore,
+                                lastWhyReason = debugWhyReason
                             )
                         }
 
@@ -1031,7 +1048,6 @@ private fun BottomControlDock(
                 )
             }
 
-            // Row with 5 small buttons, each having contentPadding = PaddingValues(0.dp) and maxLines = 1
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)

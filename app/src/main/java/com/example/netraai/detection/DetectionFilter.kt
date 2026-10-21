@@ -98,6 +98,77 @@ object DetectionFilter {
     }
 
     /**
+     * Returns null if accepted, otherwise one of NOT_WHITELISTED, BELOW_THRESHOLD(score/needed), TOO_SMALL, EDGE_REJECTED.
+     */
+    fun rejectReason(
+        label: String,
+        score: Float,
+        left: Float,
+        top: Float,
+        right: Float,
+        bottom: Float,
+        uprightWidth: Float,
+        uprightHeight: Float,
+        sensitivity: DetectionSensitivity = DetectionSensitivity.NORMAL
+    ): String? {
+        if (!isWhitelisted(label)) return "NOT_WHITELISTED"
+
+        val threshold = getThreshold(label, sensitivity)
+        if (score < threshold) return "BELOW_THRESHOLD($score/$threshold)"
+
+        if (uprightWidth > 0f && uprightHeight > 0f) {
+            val frameArea = uprightWidth * uprightHeight
+            val boxWidth = (right - left).coerceAtLeast(0f)
+            val boxHeight = (bottom - top).coerceAtLeast(0f)
+            val boxArea = boxWidth * boxHeight
+            val areaRatio = boxArea / frameArea
+
+            if (areaRatio < MIN_BOX_AREA_RATIO) return "TOO_SMALL"
+
+            val marginX = uprightWidth * EDGE_MARGIN_RATIO
+            val marginY = uprightHeight * EDGE_MARGIN_RATIO
+            val touchesLeft = left <= marginX
+            val touchesTop = top <= marginY
+            val touchesRight = right >= (uprightWidth - marginX)
+            val touchesBottom = bottom >= (uprightHeight - marginY)
+
+            val touchesLeftOrRight = touchesLeft || touchesRight
+            val touchesTopOrBottom = touchesTop || touchesBottom
+
+            if (touchesLeftOrRight && score < HIGH_CONFIDENCE_EDGE_THRESHOLD) {
+                return "EDGE_REJECTED"
+            }
+
+            val cleanLabel = label.trim().lowercase()
+            val isPersonOrVehicle = cleanLabel == "person" || AlertPriority.fromLabel(cleanLabel) == AlertPriority.PRIORITY_1
+
+            if (touchesTopOrBottom) {
+                if (isPersonOrVehicle) {
+                    if (score < 0.80f) return "EDGE_REJECTED"
+                } else {
+                    if (score < HIGH_CONFIDENCE_EDGE_THRESHOLD) return "EDGE_REJECTED"
+                }
+            }
+        }
+
+        return null
+    }
+
+    fun rejectReason(
+        label: String,
+        score: Float,
+        box: RectF? = null,
+        uprightWidth: Float = 0f,
+        uprightHeight: Float = 0f,
+        sensitivity: DetectionSensitivity = DetectionSensitivity.NORMAL
+    ): String? {
+        if (box == null) {
+            return rejectReason(label, score, 0f, 0f, 0f, 0f, uprightWidth, uprightHeight, sensitivity)
+        }
+        return rejectReason(label, score, box.left, box.top, box.right, box.bottom, uprightWidth, uprightHeight, sensitivity)
+    }
+
+    /**
      * Determines whether a detection passes whitelist, confidence threshold, size, and edge checks.
      */
     fun isAccepted(
@@ -111,49 +182,7 @@ object DetectionFilter {
         uprightHeight: Float,
         sensitivity: DetectionSensitivity = DetectionSensitivity.NORMAL
     ): Boolean {
-        if (!isWhitelisted(label)) return false
-
-        val threshold = getThreshold(label, sensitivity)
-        if (score < threshold) return false
-
-        if (uprightWidth > 0f && uprightHeight > 0f) {
-            val frameArea = uprightWidth * uprightHeight
-            val boxWidth = (right - left).coerceAtLeast(0f)
-            val boxHeight = (bottom - top).coerceAtLeast(0f)
-            val boxArea = boxWidth * boxHeight
-            val areaRatio = boxArea / frameArea
-
-            if (areaRatio < MIN_BOX_AREA_RATIO) return false
-
-            val marginX = uprightWidth * EDGE_MARGIN_RATIO
-            val marginY = uprightHeight * EDGE_MARGIN_RATIO
-            val touchesLeft = left <= marginX
-            val touchesTop = top <= marginY
-            val touchesRight = right >= (uprightWidth - marginX)
-            val touchesBottom = bottom >= (uprightHeight - marginY)
-
-            val touchesLeftOrRight = touchesLeft || touchesRight
-            val touchesTopOrBottom = touchesTop || touchesBottom
-
-            // Left/Right edge boxes require score >= 0.85
-            if (touchesLeftOrRight && score < HIGH_CONFIDENCE_EDGE_THRESHOLD) {
-                return false
-            }
-
-            val cleanLabel = label.trim().lowercase()
-            val isPersonOrVehicle = cleanLabel == "person" || AlertPriority.fromLabel(cleanLabel) == AlertPriority.PRIORITY_1
-
-            // Top/Bottom edge boxes: person or vehicle accepted if score >= 0.80, others require >= 0.85
-            if (touchesTopOrBottom) {
-                if (isPersonOrVehicle) {
-                    if (score < 0.80f) return false
-                } else {
-                    if (score < HIGH_CONFIDENCE_EDGE_THRESHOLD) return false
-                }
-            }
-        }
-
-        return true
+        return rejectReason(label, score, left, top, right, bottom, uprightWidth, uprightHeight, sensitivity) == null
     }
 
     fun isAccepted(
@@ -164,10 +193,7 @@ object DetectionFilter {
         uprightHeight: Float = 0f,
         sensitivity: DetectionSensitivity = DetectionSensitivity.NORMAL
     ): Boolean {
-        if (box == null) {
-            return isAccepted(label, score, 0f, 0f, 0f, 0f, uprightWidth, uprightHeight, sensitivity)
-        }
-        return isAccepted(label, score, box.left, box.top, box.right, box.bottom, uprightWidth, uprightHeight, sensitivity)
+        return rejectReason(label, score, box, uprightWidth, uprightHeight, sensitivity) == null
     }
 
     /**

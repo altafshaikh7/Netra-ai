@@ -23,6 +23,7 @@ class ObjectDetectorHelper(
     modelAssetName: String = DEFAULT_MODEL_NAME,
     var sensitivity: DetectionSensitivity = DetectionSensitivity.NORMAL,
     var calibrationMultiplier: Float = 1.0f,
+    var onWhyLogged: ((String) -> Unit)? = null,
     val distanceEstimator: DistanceEstimator = DistanceEstimator()
 ) {
     private val appContext = context.applicationContext
@@ -170,8 +171,10 @@ class ObjectDetectorHelper(
                     "Raw detection: label=$label, score=${String.format("%.2f", score)}, box=[L:${box.left.toInt()}, T:${box.top.toInt()}, R:${box.right.toInt()}, B:${box.bottom.toInt()}]"
                 )
 
-                // Whitelist, score threshold, size, and edge filtering
-                if (!DetectionFilter.isAccepted(label, score, box, uprightWidth, uprightHeight, sensitivity)) {
+                val rejectReason = DetectionFilter.rejectReason(label, score, box, uprightWidth, uprightHeight, sensitivity)
+                if (rejectReason != null) {
+                    Log.d("NetraWhy", "Rejected: label=$label, reason=$rejectReason")
+                    onWhyLogged?.invoke(rejectReason)
                     return@mapNotNull null
                 }
 

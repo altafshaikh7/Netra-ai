@@ -1,5 +1,6 @@
 package com.example.netraai.feedback
 
+import android.util.Log
 import com.example.netraai.detection.AlertPriority
 import com.example.netraai.detection.CorridorFilter
 import com.example.netraai.detection.CrowdDetector
@@ -9,13 +10,14 @@ import com.example.netraai.voice.TtsManager
 
 /**
  * AlertEngine manages obstacle prioritization, speech queueing/interruptions,
- * corridor filtering, crowd mode detection, and global rate limiting.
+ * corridor filtering, crowd mode detection, global rate limiting, and "why silent" diagnostics.
  */
 class AlertEngine(
     private val speakAction: (text: String, interrupt: Boolean) -> Unit,
     private val isTtsSpeaking: () -> Boolean,
     val cooldownTracker: AlertCooldownTracker = AlertCooldownTracker(),
-    val crowdDetector: CrowdDetector = CrowdDetector()
+    val crowdDetector: CrowdDetector = CrowdDetector(),
+    var onWhyLogged: ((String) -> Unit)? = null
 ) {
     private var lastCrowdSpokenTimeMs: Long = 0L
 
@@ -38,6 +40,20 @@ class AlertEngine(
         if (obstacles.isEmpty()) return null
 
         // 1. Filter by corridor and distance
+        for (obstacle in obstacles) {
+            if (!CorridorFilter.isInCorridor(obstacle.normalizedCenterX)) {
+                try {
+                    Log.d("NetraWhy", "Dropped: label=${obstacle.label}, reason=OUTSIDE_CORRIDOR")
+                } catch (_: Exception) {}
+                onWhyLogged?.invoke("OUTSIDE_CORRIDOR")
+            } else if (obstacle.distanceMeters != null && obstacle.distanceMeters > 4.0f) {
+                try {
+                    Log.d("NetraWhy", "Dropped: label=${obstacle.label}, reason=TOO_FAR")
+                } catch (_: Exception) {}
+                onWhyLogged?.invoke("TOO_FAR")
+            }
+        }
+
         val corridorObstacles = obstacles.filter { CorridorFilter.isValidForAlert(it) }
         if (corridorObstacles.isEmpty()) return null
 
@@ -49,16 +65,31 @@ class AlertEngine(
             speakAction(crowdMsg, false)
         }
 
-        // If crowd mode active, stop announcing individual people
         val effectiveObstacles = if (isCrowd) {
-            corridorObstacles.filter { !it.label.equals("person", ignoreCase = true) }
+            val nonPeople = corridorObstacles.filter { !it.label.equals("person", ignoreCase = true) }
+            val people = corridorObstacles.filter { it.label.equals("person", ignoreCase = true) }
+            for (p in people) {
+                try {
+                    Log.d("NetraWhy", "Dropped: label=${p.label}, reason=CROWD_PERSON_SUPPRESSED")
+                } catch (_: Exception) {}
+                onWhyLogged?.invoke("CROWD_PERSON_SUPPRESSED")
+            }
+            nonPeople
         } else {
-            corridorObstacles.filter { !(it.label.equals("person", ignoreCase = true) && it.distance == Distance.FAR) }
+            corridorObstacles.filter {
+                val isFarPerson = it.label.equals("person", ignoreCase = true) && it.distance == Distance.FAR
+                if (isFarPerson) {
+                    try {
+                        Log.d("NetraWhy", "Dropped: label=${it.label}, reason=FAR_PERSON")
+                    } catch (_: Exception) {}
+                    onWhyLogged?.invoke("FAR_PERSON")
+                }
+                !isFarPerson
+            }
         }
 
         if (effectiveObstacles.isEmpty()) return null
 
-        // 3. Sort candidates by urgency
         val sortedCandidates = effectiveObstacles.sortedWith(
             compareBy<DetectedObstacle> { it.priority.level }
                 .thenByDescending { it.distance.urgencyLevel }
@@ -67,6 +98,10 @@ class AlertEngine(
 
         for (candidate in sortedCandidates) {
             if (candidate.distanceMeters != null && candidate.distanceMeters > 4.0f) {
+                try {
+                    Log.d("NetraWhy", "Dropped: label=${candidate.label}, reason=TOO_FAR")
+                } catch (_: Exception) {}
+                onWhyLogged?.invoke("TOO_FAR")
                 continue
             }
 
@@ -79,7 +114,13 @@ class AlertEngine(
                 currentTimeMs = currentTimeMs
             )
 
-            if (!shouldAlert) continue
+            if (!shouldAlert) {
+                try {
+                    Log.d("NetraWhy", "Dropped: label=${candidate.label}, reason=RATE_LIMITED")
+                } catch (_: Exception) {}
+                onWhyLogged?.invoke("RATE_LIMITED")
+                continue
+            }
 
             val sentence = AlertStrings.buildAlertSentence(
                 candidate.label,
@@ -99,7 +140,13 @@ class AlertEngine(
                     return candidate
                 }
                 AlertPriority.PRIORITY_3 -> {
-                    if (isTtsSpeaking()) continue
+                    if (isTtsSpeaking()) {
+                        try {
+                            Log.d("NetraWhy", "Dropped: label=${candidate.label}, reason=TTS_BUSY")
+                        } catch (_: Exception) {}
+                        onWhyLogged?.invoke("TTS_BUSY")
+                        continue
+                    }
                     speakAction(sentence, false)
                     return candidate
                 }
