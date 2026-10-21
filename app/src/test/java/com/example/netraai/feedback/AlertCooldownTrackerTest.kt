@@ -8,8 +8,7 @@ import org.junit.Test
 
 class AlertCooldownTrackerTest {
 
-    private val cooldownMs = 4000L
-    private val tracker = AlertCooldownTracker(cooldownMs = cooldownMs)
+    private val tracker = AlertCooldownTracker(globalRateLimitMs = 0L, repeatCooldownMs = 4000L)
 
     @Test
     fun testFirstAlertAllowed() {

@@ -77,19 +77,24 @@ object DetectionFilter {
     }
 
     /**
-     * Checks if a bounding box touches extreme frame edges.
+     * Checks if bounding box coordinates touch extreme frame edges.
      */
-    fun isExtremeEdgeBox(box: RectF?, uprightWidth: Float, uprightHeight: Float): Boolean {
-        if (box == null || uprightWidth <= 0f || uprightHeight <= 0f) return false
+    fun isExtremeEdgeBox(left: Float, top: Float, right: Float, bottom: Float, uprightWidth: Float, uprightHeight: Float): Boolean {
+        if (uprightWidth <= 0f || uprightHeight <= 0f) return false
         val marginX = uprightWidth * EDGE_MARGIN_RATIO
         val marginY = uprightHeight * EDGE_MARGIN_RATIO
 
-        val touchesLeft = box.left <= marginX
-        val touchesTop = box.top <= marginY
-        val touchesRight = box.right >= (uprightWidth - marginX)
-        val touchesBottom = box.bottom >= (uprightHeight - marginY)
+        val touchesLeft = left <= marginX
+        val touchesTop = top <= marginY
+        val touchesRight = right >= (uprightWidth - marginX)
+        val touchesBottom = bottom >= (uprightHeight - marginY)
 
         return touchesLeft || touchesTop || touchesRight || touchesBottom
+    }
+
+    fun isExtremeEdgeBox(box: RectF?, uprightWidth: Float, uprightHeight: Float): Boolean {
+        if (box == null) return false
+        return isExtremeEdgeBox(box.left, box.top, box.right, box.bottom, uprightWidth, uprightHeight)
     }
 
     /**
@@ -98,9 +103,12 @@ object DetectionFilter {
     fun isAccepted(
         label: String,
         score: Float,
-        box: RectF? = null,
-        uprightWidth: Float = 0f,
-        uprightHeight: Float = 0f,
+        left: Float,
+        top: Float,
+        right: Float,
+        bottom: Float,
+        uprightWidth: Float,
+        uprightHeight: Float,
         sensitivity: DetectionSensitivity = DetectionSensitivity.NORMAL
     ): Boolean {
         if (!isWhitelisted(label)) return false
@@ -108,21 +116,58 @@ object DetectionFilter {
         val threshold = getThreshold(label, sensitivity)
         if (score < threshold) return false
 
-        if (box != null && uprightWidth > 0f && uprightHeight > 0f) {
+        if (uprightWidth > 0f && uprightHeight > 0f) {
             val frameArea = uprightWidth * uprightHeight
-            val boxArea = (box.width() * box.height()).coerceAtLeast(0f)
+            val boxWidth = (right - left).coerceAtLeast(0f)
+            val boxHeight = (bottom - top).coerceAtLeast(0f)
+            val boxArea = boxWidth * boxHeight
             val areaRatio = boxArea / frameArea
 
-            // Ignore tiny boxes under 2% area
             if (areaRatio < MIN_BOX_AREA_RATIO) return false
 
-            // Ignore extreme edge boxes unless score is very high (>= 0.85)
-            if (isExtremeEdgeBox(box, uprightWidth, uprightHeight) && score < HIGH_CONFIDENCE_EDGE_THRESHOLD) {
+            val marginX = uprightWidth * EDGE_MARGIN_RATIO
+            val marginY = uprightHeight * EDGE_MARGIN_RATIO
+            val touchesLeft = left <= marginX
+            val touchesTop = top <= marginY
+            val touchesRight = right >= (uprightWidth - marginX)
+            val touchesBottom = bottom >= (uprightHeight - marginY)
+
+            val touchesLeftOrRight = touchesLeft || touchesRight
+            val touchesTopOrBottom = touchesTop || touchesBottom
+
+            // Left/Right edge boxes require score >= 0.85
+            if (touchesLeftOrRight && score < HIGH_CONFIDENCE_EDGE_THRESHOLD) {
                 return false
+            }
+
+            val cleanLabel = label.trim().lowercase()
+            val isPersonOrVehicle = cleanLabel == "person" || AlertPriority.fromLabel(cleanLabel) == AlertPriority.PRIORITY_1
+
+            // Top/Bottom edge boxes: person or vehicle accepted if score >= 0.80, others require >= 0.85
+            if (touchesTopOrBottom) {
+                if (isPersonOrVehicle) {
+                    if (score < 0.80f) return false
+                } else {
+                    if (score < HIGH_CONFIDENCE_EDGE_THRESHOLD) return false
+                }
             }
         }
 
         return true
+    }
+
+    fun isAccepted(
+        label: String,
+        score: Float,
+        box: RectF? = null,
+        uprightWidth: Float = 0f,
+        uprightHeight: Float = 0f,
+        sensitivity: DetectionSensitivity = DetectionSensitivity.NORMAL
+    ): Boolean {
+        if (box == null) {
+            return isAccepted(label, score, 0f, 0f, 0f, 0f, uprightWidth, uprightHeight, sensitivity)
+        }
+        return isAccepted(label, score, box.left, box.top, box.right, box.bottom, uprightWidth, uprightHeight, sensitivity)
     }
 
     /**

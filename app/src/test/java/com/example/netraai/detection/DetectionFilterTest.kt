@@ -57,4 +57,23 @@ class DetectionFilterTest {
         assertEquals(0.80f, DetectionFilter.getThreshold("car", DetectionSensitivity.LOW), 0.001f)
         assertEquals(0.85f, DetectionFilter.getThreshold("person", DetectionSensitivity.LOW), 0.001f)
     }
+
+    @Test
+    fun testEdgeBoxFilteringRules() {
+        val width = 1000f
+        val height = 1000f
+
+        // Box touching top edge (top = 0f <= 20f), area ratio = 300*300 / 1000000 = 0.09 (>= 0.02)
+        // Person/Vehicle with score 0.80 touching top/bottom edge must NOT be rejected
+        assertTrue(DetectionFilter.isAccepted("person", 0.80f, 350f, 0f, 650f, 300f, width, height))
+        assertTrue(DetectionFilter.isAccepted("car", 0.80f, 350f, 0f, 650f, 300f, width, height))
+
+        // Other object (e.g. chair) with score 0.80 touching top edge must be rejected (needs >= 0.85)
+        assertFalse(DetectionFilter.isAccepted("chair", 0.80f, 350f, 0f, 650f, 300f, width, height))
+        assertTrue(DetectionFilter.isAccepted("chair", 0.85f, 350f, 0f, 650f, 300f, width, height))
+
+        // Box touching left/right edge (left = 0f) with score < 0.85 must be rejected
+        assertFalse(DetectionFilter.isAccepted("person", 0.80f, 0f, 350f, 300f, 650f, width, height))
+        assertTrue(DetectionFilter.isAccepted("person", 0.85f, 0f, 350f, 300f, 650f, width, height))
+    }
 }

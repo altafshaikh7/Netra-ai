@@ -56,13 +56,14 @@ class AlertEngineTest {
             confidence = 0.85f,
             direction = Direction.LEFT,
             distance = Distance.NEAR,
-            priority = AlertPriority.PRIORITY_2
+            priority = AlertPriority.PRIORITY_2,
+            normalizedCenterX = 0.5f // inside corridor
         )
 
         val spoken = alertEngine.processObstacles(listOf(person), language = "en")
 
         assertNotNull(spoken)
-        assertEquals("Person left, nearby.", spokenText)
+        assertEquals("Person left, close.", spokenText)
         assertEquals(false, wasInterrupted)
     }
 
@@ -73,7 +74,8 @@ class AlertEngineTest {
             confidence = 0.90f,
             direction = Direction.AHEAD,
             distance = Distance.FAR,
-            priority = AlertPriority.PRIORITY_2
+            priority = AlertPriority.PRIORITY_2,
+            normalizedCenterX = 0.5f
         )
 
         val spoken = alertEngine.processObstacles(listOf(farPerson), language = "en")
@@ -89,14 +91,16 @@ class AlertEngineTest {
             label = "chair",
             confidence = 0.85f,
             direction = Direction.RIGHT,
-            distance = Distance.FAR,
-            priority = AlertPriority.PRIORITY_3
+            distance = Distance.NEAR,
+            priority = AlertPriority.PRIORITY_3,
+            normalizedCenterX = 0.5f,
+            distanceMeters = 3.0f
         )
 
         val spoken = alertEngine.processObstacles(listOf(chair), language = "en")
 
         assertNotNull(spoken)
-        assertEquals("Chair right, far.", spokenText)
+        assertEquals("Chair right, about 3 meters.", spokenText)
         assertEquals(false, wasInterrupted)
     }
 
@@ -107,8 +111,10 @@ class AlertEngineTest {
             label = "chair",
             confidence = 0.85f,
             direction = Direction.RIGHT,
-            distance = Distance.FAR,
-            priority = AlertPriority.PRIORITY_3
+            distance = Distance.NEAR,
+            priority = AlertPriority.PRIORITY_3,
+            normalizedCenterX = 0.5f,
+            distanceMeters = 3.0f
         )
 
         val spoken = alertEngine.processObstacles(listOf(chair), language = "en")
@@ -124,26 +130,28 @@ class AlertEngineTest {
             confidence = 0.95f,
             direction = Direction.AHEAD,
             distance = Distance.VERY_CLOSE,
-            priority = AlertPriority.PRIORITY_1
+            priority = AlertPriority.PRIORITY_1,
+            normalizedCenterX = 0.5f,
+            distanceMeters = 1.0f
         )
 
         val spoken = alertEngine.processObstacles(listOf(car), language = "hi")
 
         assertNotNull(spoken)
-        assertEquals("कार सामने, बहुत पास।", spokenText)
+        assertEquals("कार सामने, करीब 1 मीटर।", spokenText)
     }
 
     @Test
     fun testMultipleObstaclesHighestPrioritySelected() {
-        val chair = DetectedObstacle("chair", 0.9f, Direction.RIGHT, Distance.FAR, AlertPriority.PRIORITY_3)
-        val person = DetectedObstacle("person", 0.85f, Direction.LEFT, Distance.NEAR, AlertPriority.PRIORITY_2)
-        val bus = DetectedObstacle("bus", 0.80f, Direction.AHEAD, Distance.VERY_CLOSE, AlertPriority.PRIORITY_1)
+        val chair = DetectedObstacle("chair", 0.9f, Direction.RIGHT, Distance.NEAR, AlertPriority.PRIORITY_3, normalizedCenterX = 0.5f, distanceMeters = 3.0f)
+        val person = DetectedObstacle("person", 0.85f, Direction.LEFT, Distance.NEAR, AlertPriority.PRIORITY_2, normalizedCenterX = 0.5f, distanceMeters = 2.0f)
+        val bus = DetectedObstacle("bus", 0.80f, Direction.AHEAD, Distance.VERY_CLOSE, AlertPriority.PRIORITY_1, normalizedCenterX = 0.5f, distanceMeters = 1.0f)
 
         val spoken = alertEngine.processObstacles(listOf(chair, bus, person), language = "en")
 
         assertNotNull(spoken)
         assertEquals("bus", spoken?.label)
-        assertEquals("Bus ahead, very close.", spokenText)
+        assertEquals("Bus ahead, about 1 meters.", spokenText)
         assertEquals(true, wasInterrupted)
     }
 }

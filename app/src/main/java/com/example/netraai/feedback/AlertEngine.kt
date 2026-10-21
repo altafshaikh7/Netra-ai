@@ -1,41 +1,35 @@
 package com.example.netraai.feedback
 
 import com.example.netraai.detection.AlertPriority
+import com.example.netraai.detection.CorridorFilter
+import com.example.netraai.detection.CrowdDetector
 import com.example.netraai.detection.DetectedObstacle
 import com.example.netraai.detection.Distance
 import com.example.netraai.voice.TtsManager
 
 /**
  * AlertEngine manages obstacle prioritization, speech queueing/interruptions,
- * cooldown suppression, and multi-language spoken feedback.
- *
- * Enforces rule: Person alerts ONLY when person is NEAR or VERY_CLOSE; ignore FAR persons completely.
- * Ignores objects beyond 6 meters.
+ * corridor filtering, crowd mode detection, and global rate limiting.
  */
 class AlertEngine(
     private val speakAction: (text: String, interrupt: Boolean) -> Unit,
     private val isTtsSpeaking: () -> Boolean,
-    val cooldownTracker: AlertCooldownTracker = AlertCooldownTracker()
+    val cooldownTracker: AlertCooldownTracker = AlertCooldownTracker(),
+    val crowdDetector: CrowdDetector = CrowdDetector()
 ) {
+    private var lastCrowdSpokenTimeMs: Long = 0L
 
     constructor(
         ttsManager: TtsManager,
-        cooldownTracker: AlertCooldownTracker = AlertCooldownTracker()
+        cooldownTracker: AlertCooldownTracker = AlertCooldownTracker(),
+        crowdDetector: CrowdDetector = CrowdDetector()
     ) : this(
         speakAction = { text, interrupt -> ttsManager.speak(text, interrupt) },
         isTtsSpeaking = { ttsManager.isSpeaking },
-        cooldownTracker = cooldownTracker
+        cooldownTracker = cooldownTracker,
+        crowdDetector = crowdDetector
     )
 
-    /**
-     * Evaluates a list of detected obstacles in the current frame and speaks the highest priority
-     * valid alert based on cooldown and distance rules.
-     *
-     * @param obstacles List of obstacles detected in the current camera frame.
-     * @param language Current language code ("en" or "hi").
-     * @param currentTimeMs Current timestamp in ms.
-     * @return The [DetectedObstacle] that triggered the alert, or `null` if none was spoken.
-     */
     fun processObstacles(
         obstacles: List<DetectedObstacle>,
         language: String,
@@ -43,23 +37,36 @@ class AlertEngine(
     ): DetectedObstacle? {
         if (obstacles.isEmpty()) return null
 
-        // 1. Sort all candidates by urgency:
-        //    Priority (1 before 2 before 3), then Distance (VERY_CLOSE before NEAR before FAR), then confidence
-        val sortedCandidates = obstacles.sortedWith(
+        // 1. Filter by corridor and distance
+        val corridorObstacles = obstacles.filter { CorridorFilter.isValidForAlert(it) }
+        if (corridorObstacles.isEmpty()) return null
+
+        // 2. Evaluate Crowd Mode
+        val (isCrowd, newCrowdTime) = crowdDetector.evaluate(corridorObstacles, currentTimeMs, lastCrowdSpokenTimeMs)
+        if (isCrowd && newCrowdTime != lastCrowdSpokenTimeMs) {
+            lastCrowdSpokenTimeMs = newCrowdTime
+            val crowdMsg = AlertStrings.getCrowdMessage(language)
+            speakAction(crowdMsg, false)
+        }
+
+        // If crowd mode active, stop announcing individual people
+        val effectiveObstacles = if (isCrowd) {
+            corridorObstacles.filter { !it.label.equals("person", ignoreCase = true) }
+        } else {
+            corridorObstacles.filter { !(it.label.equals("person", ignoreCase = true) && it.distance == Distance.FAR) }
+        }
+
+        if (effectiveObstacles.isEmpty()) return null
+
+        // 3. Sort candidates by urgency
+        val sortedCandidates = effectiveObstacles.sortedWith(
             compareBy<DetectedObstacle> { it.priority.level }
                 .thenByDescending { it.distance.urgencyLevel }
                 .thenByDescending { it.confidence }
         )
 
-        // 2. Find the highest priority candidate that passes cooldown and distance rules
         for (candidate in sortedCandidates) {
-            // STEP 2 Item 7: Person alerts ONLY when person is NEAR or VERY_CLOSE; ignore FAR persons completely
-            if (candidate.label.equals("person", ignoreCase = true) && candidate.distance == Distance.FAR) {
-                continue
-            }
-
-            // Say nothing for objects beyond 6 meters
-            if (candidate.distanceMeters != null && candidate.distanceMeters > 6.0f) {
+            if (candidate.distanceMeters != null && candidate.distanceMeters > 4.0f) {
                 continue
             }
 
@@ -67,6 +74,8 @@ class AlertEngine(
                 label = candidate.label,
                 direction = candidate.direction,
                 distance = candidate.distance,
+                distanceMeters = candidate.distanceMeters,
+                priority = candidate.priority,
                 currentTimeMs = currentTimeMs
             )
 
@@ -80,22 +89,17 @@ class AlertEngine(
                 candidate.distanceMeters
             )
 
-            // 3. Apply TTS queueing rules based on Priority
             when (candidate.priority) {
                 AlertPriority.PRIORITY_1 -> {
                     speakAction(sentence, true)
                     return candidate
                 }
-
                 AlertPriority.PRIORITY_2 -> {
                     speakAction(sentence, false)
                     return candidate
                 }
-
                 AlertPriority.PRIORITY_3 -> {
-                    if (isTtsSpeaking()) {
-                        continue
-                    }
+                    if (isTtsSpeaking()) continue
                     speakAction(sentence, false)
                     return candidate
                 }
@@ -105,10 +109,9 @@ class AlertEngine(
         return null
     }
 
-    /**
-     * Resets the cooldown tracking state (e.g. when walking mode is toggled off).
-     */
     fun reset() {
         cooldownTracker.reset()
+        crowdDetector.reset()
+        lastCrowdSpokenTimeMs = 0L
     }
 }
