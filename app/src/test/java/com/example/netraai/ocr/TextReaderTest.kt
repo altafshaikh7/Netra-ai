@@ -15,6 +15,7 @@ class TextReaderTest {
     @Test
     fun testTwoWordsSameRowLeftToRight() {
         val lines = listOf(
+
             TextLine(text = "World", left = 200, top = 50, height = 30),
             TextLine(text = "Hello", left = 50, top = 50, height = 30)
         )

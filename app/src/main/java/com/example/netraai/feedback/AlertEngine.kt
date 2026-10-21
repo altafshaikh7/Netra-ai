@@ -10,6 +10,7 @@ import com.example.netraai.voice.TtsManager
  * cooldown suppression, and multi-language spoken feedback.
  *
  * Enforces rule: Person alerts ONLY when person is NEAR or VERY_CLOSE; ignore FAR persons completely.
+ * Ignores objects beyond 6 meters.
  */
 class AlertEngine(
     private val speakAction: (text: String, interrupt: Boolean) -> Unit,
@@ -28,7 +29,7 @@ class AlertEngine(
 
     /**
      * Evaluates a list of detected obstacles in the current frame and speaks the highest priority
-     * valid alert based on cooldown and queue rules.
+     * valid alert based on cooldown and distance rules.
      *
      * @param obstacles List of obstacles detected in the current camera frame.
      * @param language Current language code ("en" or "hi").
@@ -57,6 +58,11 @@ class AlertEngine(
                 continue
             }
 
+            // Say nothing for objects beyond 6 meters
+            if (candidate.distanceMeters != null && candidate.distanceMeters > 6.0f) {
+                continue
+            }
+
             val shouldAlert = cooldownTracker.shouldAlert(
                 label = candidate.label,
                 direction = candidate.direction,
@@ -70,7 +76,8 @@ class AlertEngine(
                 candidate.label,
                 candidate.direction,
                 candidate.distance,
-                language
+                language,
+                candidate.distanceMeters
             )
 
             // 3. Apply TTS queueing rules based on Priority

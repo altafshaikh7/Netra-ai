@@ -91,20 +91,34 @@ object AlertStrings {
 
     /**
      * Builds short, clear alert sentences, e.g.:
-     * English: "Car ahead, very close."
-     * Hindi: "कार सामने, बहुत पास।"
+     * English: "Person ahead, about 2 meters"
+     * Hindi: "व्यक्ति सामने, करीब 2 मीटर"
      */
     fun buildAlertSentence(
         rawLabel: String,
         direction: Direction,
         distance: Distance,
-        language: String
+        language: String,
+        distanceMeters: Float? = null
     ): String {
         val isHindi = language.equals("hi", ignoreCase = true)
         val labelStr = getLabel(rawLabel, language)
         val dirStr = getDirection(direction, language)
-        val distStr = getDistance(distance, language)
 
+        if (distanceMeters != null) {
+            val metersStr = if (distanceMeters == distanceMeters.toInt().toFloat()) {
+                distanceMeters.toInt().toString()
+            } else {
+                distanceMeters.toString()
+            }
+            return if (isHindi) {
+                "$labelStr $dirStr, करीब $metersStr मीटर।"
+            } else {
+                "$labelStr $dirStr, about $metersStr meters."
+            }
+        }
+
+        val distStr = getDistance(distance, language)
         return if (isHindi) {
             "$labelStr $dirStr, $distStr।"
         } else {

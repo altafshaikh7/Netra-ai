@@ -13,6 +13,7 @@ import android.graphics.RectF
  * @property isBorderline True if confidence is borderline and warrants "maybe" phrasing.
  * @property boundingBox Upright bounding box coordinates in pixel or normalized space (for debug overlay).
  * @property normalizedCenterX Normalized horizontal center coordinate in [0.0, 1.0].
+ * @property distanceMeters Calculated distance in meters using real-world height and focal length.
  * @property timestampMs Timestamp in milliseconds when the object was detected.
  */
 data class DetectedObstacle(
@@ -24,5 +25,6 @@ data class DetectedObstacle(
     val isBorderline: Boolean = false,
     val boundingBox: RectF? = null,
     val normalizedCenterX: Float = 0.5f,
+    val distanceMeters: Float? = null,
     val timestampMs: Long = System.currentTimeMillis()
 )
