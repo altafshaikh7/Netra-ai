@@ -17,6 +17,8 @@ if (trustProxyEnv) {
     } else {
         app.set('trust proxy', trustProxyEnv);
     }
+} else if (process.env.NODE_ENV === 'test') {
+    app.set('trust proxy', true);
 } else {
     app.set('trust proxy', false);
 }

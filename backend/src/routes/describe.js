@@ -28,11 +28,11 @@ const upload = multer({
     }
 }).single('image');
 
-// Per-device rate limiters
+// Per-device rate limiters with distinct key prefixes
 const minuteLimiter = rateLimit({
     windowMs: 60 * 1000,
     max: 6,
-    keyGenerator: (req) => req.headers['x-device-id'] || 'unknown',
+    keyGenerator: (req) => 'min:' + (req.headers['x-device-id'] || 'unknown'),
     handler: (req, res) => {
         res.status(429).json({ error: 'Rate limit exceeded (per minute)' });
     },
@@ -43,7 +43,7 @@ const minuteLimiter = rateLimit({
 const dayLimiter = rateLimit({
     windowMs: 24 * 60 * 60 * 1000,
     max: 30,
-    keyGenerator: (req) => req.headers['x-device-id'] || 'unknown',
+    keyGenerator: (req) => 'day:' + (req.headers['x-device-id'] || 'unknown'),
     handler: (req, res) => {
         res.status(429).json({ error: 'Rate limit exceeded (per day)' });
     },
@@ -56,7 +56,7 @@ const ipDailyLimit = parseInt(process.env.IP_RATE_LIMIT_DAILY || '60', 10);
 const ipLimiter = rateLimit({
     windowMs: 24 * 60 * 60 * 1000,
     max: ipDailyLimit,
-    keyGenerator: (req) => req.ip || req.connection.remoteAddress || 'unknown',
+    keyGenerator: (req) => 'ip:' + (req.headers['x-forwarded-for'] || req.ip || req.socket?.remoteAddress || 'unknown'),
     handler: (req, res) => {
         res.status(429).json({ error: 'Rate limit exceeded (per IP daily)' });
     },
