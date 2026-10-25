@@ -1,16 +1,14 @@
 package com.example.netraai.detection
 
 object CorridorFilter {
-    const val CORRIDOR_LEFT = 0.30f
-    const val CORRIDOR_RIGHT = 0.70f
     const val MAX_DISTANCE_METERS = 4.0f
 
-    fun isInCorridor(normalizedCenterX: Float): Boolean {
-        return normalizedCenterX in CORRIDOR_LEFT..CORRIDOR_RIGHT
+    fun isInCorridor(normalizedCenterX: Float, corridorLeft: Float = 0.15f, corridorRight: Float = 0.85f): Boolean {
+        return normalizedCenterX in corridorLeft..corridorRight
     }
 
-    fun isValidForAlert(obstacle: DetectedObstacle): Boolean {
-        if (!isInCorridor(obstacle.normalizedCenterX)) return false
+    fun isValidForAlert(obstacle: DetectedObstacle, corridorLeft: Float = 0.15f, corridorRight: Float = 0.85f): Boolean {
+        if (!isInCorridor(obstacle.normalizedCenterX, corridorLeft, corridorRight)) return false
 
         val meters = obstacle.distanceMeters
         if (meters != null) {

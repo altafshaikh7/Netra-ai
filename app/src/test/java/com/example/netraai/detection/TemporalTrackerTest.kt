@@ -59,14 +59,14 @@ class TemporalTrackerTest {
 
     @Test
     fun testScatteredLowScoreHitsRejectedByAverageScoreRule() {
-        // Person threshold is 0.80
-        val lowPerson = createObstacle("person", confidence = 0.65f)
+        // Threshold for person is >= 0.55
+        val lowPerson = createObstacle("person", confidence = 0.40f)
 
         repeat(4) {
             tracker.filterConfirmed(listOf(lowPerson))
         }
 
-        // Average score is 0.65 < 0.80 threshold -> Must NOT be confirmed
+        // Average score is 0.40 < threshold -> Must NOT be confirmed
         val res = tracker.filterConfirmed(listOf(lowPerson))
         assertTrue("Scattered or low average score hits must not confirm", res.isEmpty())
     }

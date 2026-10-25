@@ -140,69 +140,6 @@ test('POST /describe text file renamed to .jpg (invalid magic bytes) returns 400
     }
 });
 
-test('POST /describe same device id from different IPs is still limited', async () => {
-    const { server, port } = await startTestServer();
-    try {
-        const boundary = '----WebKitFormBoundary7MA4YWxkTrZu0gW';
-        const fakeJpeg = Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46]);
-        const header = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="test.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`);
-        const footer = Buffer.from(`\r\n--${boundary}--\r\n`);
-        const body = Buffer.concat([header, fakeJpeg, footer]);
-
-        const sharedDeviceId = 'device-shared-limit-11111';
-        let lastStatus = 200;
-        // 6 per minute limit per device ID
-        for (let i = 0; i < 7; i++) {
-            const res = await fetch(`http://localhost:${port}/describe`, {
-                method: 'POST',
-                headers: {
-                    'x-device-id': sharedDeviceId,
-                    'x-forwarded-for': `10.6.0.${i + 1}`,
-                    'Content-Type': `multipart/form-data; boundary=${boundary}`
-                },
-                body
-            });
-            lastStatus = res.status;
-        }
-        assert.strictEqual(lastStatus, 429);
-    } finally {
-        await closeServer(server);
-    }
-});
-
-test('POST /describe different device ids from same IP are limited by IP limit', async () => {
-    const { server, port } = await startTestServer();
-    try {
-        const boundary = '----WebKitFormBoundary7MA4YWxkTrZu0gW';
-        const fakeJpeg = Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46]);
-        const header = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="test.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`);
-        const footer = Buffer.from(`\r\n--${boundary}--\r\n`);
-        const body = Buffer.concat([header, fakeJpeg, footer]);
-
-        const sharedIp = '10.7.0.1';
-        let hit429 = false;
-        // IP daily limit default is 60 requests
-        for (let i = 0; i < 65; i++) {
-            const res = await fetch(`http://localhost:${port}/describe`, {
-                method: 'POST',
-                headers: {
-                    'x-device-id': `device-unique-${i}-88888`,
-                    'x-forwarded-for': sharedIp,
-                    'Content-Type': `multipart/form-data; boundary=${boundary}`
-                },
-                body
-            });
-            if (res.status === 429) {
-                hit429 = true;
-                break;
-            }
-        }
-        assert.strictEqual(hit429, true);
-    } finally {
-        await closeServer(server);
-    }
-});
-
 test('POST /describe successful mock describe', async () => {
     const { server, port } = await startTestServer();
     try {
@@ -224,6 +161,68 @@ test('POST /describe successful mock describe', async () => {
         const json = await res.json();
         assert.strictEqual(res.status, 200);
         assert.strictEqual(typeof json.text, 'string');
+    } finally {
+        await closeServer(server);
+    }
+});
+
+test('POST /describe same device id from different IPs is still limited', async () => {
+    const { server, port } = await startTestServer();
+    try {
+        const boundary = '----WebKitFormBoundary7MA4YWxkTrZu0gW';
+        const fakeJpeg = Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46]);
+        const header = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="test.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`);
+        const footer = Buffer.from(`\r\n--${boundary}--\r\n`);
+        const body = Buffer.concat([header, fakeJpeg, footer]);
+
+        const sharedDeviceId = 'device-shared-limit-11111';
+        let lastStatus = 200;
+        for (let i = 0; i < 7; i++) {
+            const res = await fetch(`http://localhost:${port}/describe`, {
+                method: 'POST',
+                headers: {
+                    'x-device-id': sharedDeviceId,
+                    'x-forwarded-for': `10.6.0.${i + 1}`,
+                    'Content-Type': `multipart/form-data; boundary=${boundary}`
+                },
+                body
+            });
+            lastStatus = res.status;
+        }
+        assert.strictEqual(lastStatus, 429);
+    } finally {
+        await closeServer(server);
+    }
+});
+
+test('POST /describe spoofed x-forwarded-for does NOT bypass IP limit when TRUST_PROXY is false', async () => {
+    const { server, port } = await startTestServer();
+    try {
+        const boundary = '----WebKitFormBoundary7MA4YWxkTrZu0gW';
+        const fakeJpeg = Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46]);
+        const header = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="test.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`);
+        const footer = Buffer.from(`\r\n--${boundary}--\r\n`);
+        const body = Buffer.concat([header, fakeJpeg, footer]);
+
+        // When trust proxy is false (or default test server), Express resolves req.ip to connection IP (127.0.0.1) ignoring x-forwarded-for
+        // So spoofing different x-forwarded-for headers will still accumulate on 127.0.0.1 and trigger 429 after 60 requests
+        let hit429 = false;
+        for (let i = 0; i < 65; i++) {
+            const res = await fetch(`http://localhost:${port}/describe`, {
+                method: 'POST',
+                headers: {
+                    'x-device-id': `device-spoof-${i}-99999`,
+                    'x-forwarded-for': `203.0.113.${i + 1}`,
+                    'Content-Type': `multipart/form-data; boundary=${boundary}`
+                },
+                body
+            });
+            if (res.status === 429) {
+                hit429 = true;
+                break;
+            }
+        }
+        assert.strictEqual(hit429, true);
     } finally {
         await closeServer(server);
     }

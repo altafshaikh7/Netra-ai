@@ -21,7 +21,7 @@ import androidx.compose.ui.unit.sp
 
 /**
  * Debug overlay for testing and tuning: draws bounding boxes, classification labels,
- * confidence percentages, FPS, inference latency, motion angular speed, sharpness score, and gate status.
+ * confidence percentages, FPS, inference latency, motion angular speed, sharpness score, active profile, and gate status.
  */
 @Composable
 fun DebugOverlay(
@@ -34,6 +34,7 @@ fun DebugOverlay(
     gateStatus: GateStatus = GateStatus.ACTIVE,
     angularSpeed: Float = 0f,
     sharpnessScore: Float = 0f,
+    detectionProfile: DetectionProfile = DetectionProfile.BALANCED,
     lastWhyReason: String = ""
 ) {
     Box(modifier = modifier.fillMaxSize()) {
@@ -89,7 +90,7 @@ fun DebugOverlay(
         ) {
             Column {
                 Text(
-                    text = "DEBUG | FPS: $fps | Latency: ${inferenceTimeMs}ms | Detected: ${detections.size}",
+                    text = "DEBUG | Profile: ${detectionProfile.name} | FPS: $fps | Latency: ${inferenceTimeMs}ms",
                     color = Color(0xFF00E5FF),
                     fontSize = 12.sp
                 )

@@ -19,14 +19,10 @@ enum class DetectionSensitivity {
 
 /**
  * Pure Kotlin filtering logic for obstacle detection.
- * Enforces label whitelisting, strict score thresholds, box area gating, and extreme edge filtering.
+ * Enforces label whitelisting, profile thresholds, box area gating, and extreme edge filtering.
  * Policy: PRECISION OVER RECALL. When unsure, stay silent.
  */
 object DetectionFilter {
-
-    const val PERSON_SCORE_THRESHOLD_NORMAL = 0.80f
-    const val VEHICLE_SCORE_THRESHOLD_NORMAL = 0.75f
-    const val OTHER_SCORE_THRESHOLD_NORMAL = 0.80f
 
     const val MIN_BOX_AREA_RATIO = 0.02f // Ignore boxes < 2% of frame area
     const val EDGE_MARGIN_RATIO = 0.02f // 2% margin from upright frame edges
@@ -54,25 +50,30 @@ object DetectionFilter {
         "stop sign"
     )
 
-    fun isWhitelisted(label: String): Boolean {
+    fun isWhitelisted(label: String, allObjectsMode: Boolean = false): Boolean {
+        if (allObjectsMode) return true
         return label.trim().lowercase() in WHITELISTED_LABELS
     }
 
     /**
-     * Resolves the minimum acceptance confidence threshold for a given object label and sensitivity.
+     * Resolves minimum acceptance confidence threshold based on profile and sensitivity offset.
      */
-    fun getThreshold(label: String, sensitivity: DetectionSensitivity = DetectionSensitivity.NORMAL): Float {
+    fun getThreshold(
+        label: String,
+        sensitivity: DetectionSensitivity = DetectionSensitivity.NORMAL,
+        profileValues: DetectionProfileValues = DetectionProfileValues.BALANCED
+    ): Float {
         val cleanLabel = label.trim().lowercase()
         val baseThreshold = when {
-            cleanLabel == "person" -> PERSON_SCORE_THRESHOLD_NORMAL
-            AlertPriority.fromLabel(cleanLabel) == AlertPriority.PRIORITY_1 -> VEHICLE_SCORE_THRESHOLD_NORMAL
-            else -> OTHER_SCORE_THRESHOLD_NORMAL
+            cleanLabel == "person" -> profileValues.personThreshold
+            AlertPriority.fromLabel(cleanLabel) == AlertPriority.PRIORITY_1 -> profileValues.vehicleThreshold
+            else -> profileValues.otherThreshold
         }
 
         return when (sensitivity) {
             DetectionSensitivity.LOW -> (baseThreshold + 0.05f).coerceAtMost(0.95f)
             DetectionSensitivity.NORMAL -> baseThreshold
-            DetectionSensitivity.HIGH -> (baseThreshold - 0.05f).coerceAtLeast(0.65f)
+            DetectionSensitivity.HIGH -> (baseThreshold - 0.05f).coerceAtLeast(0.35f)
         }
     }
 
@@ -98,7 +99,7 @@ object DetectionFilter {
     }
 
     /**
-     * Returns null if accepted, otherwise one of NOT_WHITELISTED, BELOW_THRESHOLD(score/needed), TOO_SMALL, EDGE_REJECTED.
+     * Returns null if accepted, otherwise reason string.
      */
     fun rejectReason(
         label: String,
@@ -109,11 +110,13 @@ object DetectionFilter {
         bottom: Float,
         uprightWidth: Float,
         uprightHeight: Float,
-        sensitivity: DetectionSensitivity = DetectionSensitivity.NORMAL
+        sensitivity: DetectionSensitivity = DetectionSensitivity.NORMAL,
+        profileValues: DetectionProfileValues = DetectionProfileValues.BALANCED,
+        allObjectsMode: Boolean = false
     ): String? {
-        if (!isWhitelisted(label)) return "NOT_WHITELISTED"
+        if (!isWhitelisted(label, allObjectsMode)) return "NOT_WHITELISTED"
 
-        val threshold = getThreshold(label, sensitivity)
+        val threshold = getThreshold(label, sensitivity, profileValues)
         if (score < threshold) return "BELOW_THRESHOLD($score/$threshold)"
 
         if (uprightWidth > 0f && uprightHeight > 0f) {
@@ -160,12 +163,14 @@ object DetectionFilter {
         box: RectF? = null,
         uprightWidth: Float = 0f,
         uprightHeight: Float = 0f,
-        sensitivity: DetectionSensitivity = DetectionSensitivity.NORMAL
+        sensitivity: DetectionSensitivity = DetectionSensitivity.NORMAL,
+        profileValues: DetectionProfileValues = DetectionProfileValues.BALANCED,
+        allObjectsMode: Boolean = false
     ): String? {
         if (box == null) {
-            return rejectReason(label, score, 0f, 0f, 0f, 0f, uprightWidth, uprightHeight, sensitivity)
+            return rejectReason(label, score, 0f, 0f, 0f, 0f, uprightWidth, uprightHeight, sensitivity, profileValues, allObjectsMode)
         }
-        return rejectReason(label, score, box.left, box.top, box.right, box.bottom, uprightWidth, uprightHeight, sensitivity)
+        return rejectReason(label, score, box.left, box.top, box.right, box.bottom, uprightWidth, uprightHeight, sensitivity, profileValues, allObjectsMode)
     }
 
     /**
@@ -180,9 +185,11 @@ object DetectionFilter {
         bottom: Float,
         uprightWidth: Float,
         uprightHeight: Float,
-        sensitivity: DetectionSensitivity = DetectionSensitivity.NORMAL
+        sensitivity: DetectionSensitivity = DetectionSensitivity.NORMAL,
+        profileValues: DetectionProfileValues = DetectionProfileValues.BALANCED,
+        allObjectsMode: Boolean = false
     ): Boolean {
-        return rejectReason(label, score, left, top, right, bottom, uprightWidth, uprightHeight, sensitivity) == null
+        return rejectReason(label, score, left, top, right, bottom, uprightWidth, uprightHeight, sensitivity, profileValues, allObjectsMode) == null
     }
 
     fun isAccepted(
@@ -191,14 +198,13 @@ object DetectionFilter {
         box: RectF? = null,
         uprightWidth: Float = 0f,
         uprightHeight: Float = 0f,
-        sensitivity: DetectionSensitivity = DetectionSensitivity.NORMAL
+        sensitivity: DetectionSensitivity = DetectionSensitivity.NORMAL,
+        profileValues: DetectionProfileValues = DetectionProfileValues.BALANCED,
+        allObjectsMode: Boolean = false
     ): Boolean {
-        return rejectReason(label, score, box, uprightWidth, uprightHeight, sensitivity) == null
+        return rejectReason(label, score, box, uprightWidth, uprightHeight, sensitivity, profileValues, allObjectsMode) == null
     }
 
-    /**
-     * Borderline guessing is removed per PRECISION OVER RECALL policy.
-     */
     fun isBorderline(
         @Suppress("UNUSED_PARAMETER") label: String,
         @Suppress("UNUSED_PARAMETER") score: Float,

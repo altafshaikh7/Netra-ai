@@ -20,6 +20,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
@@ -27,6 +29,10 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -35,6 +41,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.netraai.detection.DetectionProfile
 import com.example.netraai.detection.DetectionSensitivity
 import com.example.netraai.feedback.FlashlightMode
 import com.example.netraai.ui.theme.DarkCard
@@ -52,16 +59,26 @@ fun SettingsSheet(
     isDebugOverlayEnabled: Boolean,
     detectionSensitivity: DetectionSensitivity,
     distanceCalibration: Float,
+    detectionProfile: DetectionProfile = DetectionProfile.BALANCED,
+    isAllObjectsMode: Boolean = false,
+    emergencyContactName: String = "",
+    emergencyContactNumber: String = "",
     onLanguageChange: (String) -> Unit,
     onSpeechSpeedChange: (Float) -> Unit,
     onFlashlightModeChange: (FlashlightMode) -> Unit,
     onDebugOverlayChange: (Boolean) -> Unit,
     onDetectionSensitivityChange: (DetectionSensitivity) -> Unit,
     onDistanceCalibrationChange: (Float) -> Unit,
+    onDetectionProfileChange: (DetectionProfile) -> Unit = {},
+    onAllObjectsModeChange: (Boolean) -> Unit = {},
+    onSaveEmergencyContact: (String, String) -> Unit = { _, _ -> },
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val isHindi = language.equals("hi", ignoreCase = true)
+
+    var contactName by remember { mutableStateOf(emergencyContactName) }
+    var contactNumber by remember { mutableStateOf(emergencyContactNumber) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -164,7 +181,187 @@ fun SettingsSheet(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // 2. Speech Speed Slider
+            // 2. Detection Profile Selection (STRICT, BALANCED, SENSITIVE)
+            Text(
+                text = if (isHindi) "डिटेक्शन प्रोफाइल (Detection Profile)" else "Detection Profile",
+                color = TextSecondary,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                DetectionProfile.entries.forEach { profile ->
+                    val isSelected = detectionProfile == profile
+                    val label = when (profile) {
+                        DetectionProfile.STRICT -> if (isHindi) "सख्त" else "Strict"
+                        DetectionProfile.BALANCED -> if (isHindi) "संतुलित" else "Balanced"
+                        DetectionProfile.SENSITIVE -> if (isHindi) "संवेदनशील" else "Sensitive"
+                    }
+                    Button(
+                        onClick = { onDetectionProfileChange(profile) },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isSelected) ElectricCyan else DarkCard
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(52.dp)
+                            .semantics {
+                                contentDescription = "Detection profile $label"
+                            }
+                    ) {
+                        Text(
+                            text = label,
+                            color = if (isSelected) Color.Black else TextPrimary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // 3. Sensitivity Offset (Low / Normal / High)
+            Text(
+                text = if (isHindi) "संवेदनशीलता ऑफसेट (Sensitivity Offset)" else "Sensitivity Offset",
+                color = TextSecondary,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                DetectionSensitivity.entries.forEach { sens ->
+                    val isSelected = detectionSensitivity == sens
+                    val label = when (sens) {
+                        DetectionSensitivity.LOW -> if (isHindi) "कम" else "Low"
+                        DetectionSensitivity.NORMAL -> if (isHindi) "सामान्य" else "Normal"
+                        DetectionSensitivity.HIGH -> if (isHindi) "उच्च" else "High"
+                    }
+                    Button(
+                        onClick = { onDetectionSensitivityChange(sens) },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isSelected) ElectricCyan else DarkCard
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(52.dp)
+                            .semantics {
+                                contentDescription = "Detection sensitivity $label"
+                            }
+                    ) {
+                        Text(
+                            text = label,
+                            color = if (isSelected) Color.Black else TextPrimary,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // 4. "All Objects" Mode Switch
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DarkCard, shape = RoundedCornerShape(12.dp))
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = if (isHindi) "सभी वस्तुएं मोड (All Objects Mode)" else "All Objects Mode",
+                        color = TextPrimary,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = if (isHindi) "व्हाइटलिस्ट हटाएं और किसी भी वस्तु की रिपोर्ट करें" else "Remove whitelist to detect any object",
+                        color = TextSecondary,
+                        fontSize = 13.sp
+                    )
+                }
+
+                Switch(
+                    checked = isAllObjectsMode,
+                    onCheckedChange = onAllObjectsModeChange,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.Black,
+                        checkedTrackColor = ElectricCyan,
+                        uncheckedThumbColor = TextSecondary,
+                        uncheckedTrackColor = DarkSurface
+                    ),
+                    modifier = Modifier.semantics {
+                        contentDescription = "Toggle all objects mode"
+                    }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // 5. Emergency Contact Fields (Name & Number)
+            Text(
+                text = if (isHindi) "आपातकालीन संपर्क (Emergency Contact)" else "Emergency Contact",
+                color = TextSecondary,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = contactName,
+                onValueChange = {
+                    contactName = it
+                    onSaveEmergencyContact(contactName, contactNumber)
+                },
+                label = { Text(if (isHindi) "नाम" else "Contact Name") },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = ElectricCyan,
+                    unfocusedBorderColor = DarkCard,
+                    focusedLabelColor = ElectricCyan,
+                    unfocusedLabelColor = TextSecondary,
+                    focusedTextColor = TextPrimary,
+                    unfocusedTextColor = TextPrimary
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics {
+                        contentDescription = "Emergency contact name input"
+                    }
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = contactNumber,
+                onValueChange = {
+                    contactNumber = it
+                    onSaveEmergencyContact(contactName, contactNumber)
+                },
+                label = { Text(if (isHindi) "फ़ोन नंबर" else "Phone Number") },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = ElectricCyan,
+                    unfocusedBorderColor = DarkCard,
+                    focusedLabelColor = ElectricCyan,
+                    unfocusedLabelColor = TextSecondary,
+                    focusedTextColor = TextPrimary,
+                    unfocusedTextColor = TextPrimary
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics {
+                        contentDescription = "Emergency contact phone number input"
+                    }
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // 6. Speech Speed Slider
             Text(
                 text = if (isHindi) "वाक् गति (Speech Speed: ${String.format("%.1fx", speechSpeed)})" else "Speech Speed (${String.format("%.1fx", speechSpeed)})",
                 color = TextSecondary,
@@ -191,7 +388,7 @@ fun SettingsSheet(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // 3. Flashlight Mode (Auto / On / Off)
+            // 7. Flashlight Mode (Auto / On / Off)
             Text(
                 text = if (isHindi) "टॉर्च मोड (Flashlight Mode)" else "Flashlight Mode",
                 color = TextSecondary,
@@ -234,50 +431,7 @@ fun SettingsSheet(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // 4. Detection Sensitivity (Low / Normal / High)
-            Text(
-                text = if (isHindi) "डिटेक्शन संवेदनशीलता (Sensitivity)" else "Detection Sensitivity",
-                color = TextSecondary,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                DetectionSensitivity.entries.forEach { sens ->
-                    val isSelected = detectionSensitivity == sens
-                    val label = when (sens) {
-                        DetectionSensitivity.LOW -> if (isHindi) "कम" else "Low"
-                        DetectionSensitivity.NORMAL -> if (isHindi) "सामान्य" else "Normal"
-                        DetectionSensitivity.HIGH -> if (isHindi) "उच्च" else "High"
-                    }
-                    Button(
-                        onClick = { onDetectionSensitivityChange(sens) },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isSelected) ElectricCyan else DarkCard
-                        ),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(52.dp)
-                            .semantics {
-                                contentDescription = "Detection sensitivity $label"
-                            }
-                    ) {
-                        Text(
-                            text = label,
-                            color = if (isSelected) Color.Black else TextPrimary,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // 5. Distance Calibration Multiplier Slider
+            // 8. Distance Calibration Multiplier Slider
             Text(
                 text = if (isHindi) "दूरी अंशांकन (Distance Calibration: ${String.format("%.2fx", distanceCalibration)})" else "Distance Calibration (${String.format("%.2fx", distanceCalibration)})",
                 color = TextSecondary,
@@ -304,7 +458,7 @@ fun SettingsSheet(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // 6. Debug Overlay Switch
+            // 9. Debug Overlay Switch
             Row(
                 modifier = Modifier
                     .fillMaxWidth()

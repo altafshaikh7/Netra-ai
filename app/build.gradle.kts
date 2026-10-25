@@ -1,7 +1,17 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 }
+
+val localProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) {
+        file.inputStream().use { load(it) }
+    }
+}
+val netraBackendUrl = localProperties.getProperty("NETRA_BACKEND_URL") ?: "http://10.0.2.2:3000"
 
 android {
     namespace = "com.example.netraai"
@@ -12,19 +22,21 @@ android {
     defaultConfig {
         applicationId = "com.example.netraai"
         minSdk = 26
-        targetSdk = 37
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "BACKEND_URL", "\"$netraBackendUrl\"")
     }
 
     buildTypes {
         release {
-            optimization {
-                enable = true
-                packageScope = setOf("androidx.**", "kotlin.**", "kotlinx.**")
-            }
+            isMinifyEnabled = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
     compileOptions {
@@ -33,6 +45,8 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
+        mlModelBinding = true
     }
     androidResources {
         noCompress += "tflite"

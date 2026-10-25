@@ -28,7 +28,7 @@ const upload = multer({
     }
 }).single('image');
 
-// Per-device rate limiters with distinct key prefixes
+// Per-device rate limiters
 const minuteLimiter = rateLimit({
     windowMs: 60 * 1000,
     max: 6,
@@ -51,12 +51,12 @@ const dayLimiter = rateLimit({
     legacyHeaders: false,
 });
 
-// Per-IP rate limiter
+// Per-IP rate limiter keying strictly on req.ip ONLY
 const ipDailyLimit = parseInt(process.env.IP_RATE_LIMIT_DAILY || '60', 10);
 const ipLimiter = rateLimit({
     windowMs: 24 * 60 * 60 * 1000,
     max: ipDailyLimit,
-    keyGenerator: (req) => 'ip:' + (req.headers['x-forwarded-for'] || req.ip || req.socket?.remoteAddress || 'unknown'),
+    keyGenerator: (req) => 'ip:' + (req.ip || 'unknown'),
     handler: (req, res) => {
         res.status(429).json({ error: 'Rate limit exceeded (per IP daily)' });
     },
@@ -103,7 +103,10 @@ router.post('/describe', ipLimiter, minuteLimiter, dayLimiter, (req, res) => {
 
             res.json({ text, language });
         } catch (e) {
-            res.status(500).json({ error: 'Internal server error' });
+            if (e.message && e.message.startsWith('SERVICE_UNAVAILABLE')) {
+                return res.status(503).json({ error: 'Service temporarily unavailable. Daily call cap reached.' });
+            }
+            res.status(502).json({ error: 'Vision provider error' });
         }
     });
 });

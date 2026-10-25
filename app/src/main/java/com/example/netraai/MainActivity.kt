@@ -48,6 +48,7 @@ import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.RemoveRedEye
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
@@ -79,9 +80,12 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.netraai.camera.CameraPreview
+import com.example.netraai.cloud.BackendSceneDescriber
+import com.example.netraai.cloud.ImageDownscaler
 import com.example.netraai.data.PreferencesManager
 import com.example.netraai.detection.AlertPriority
 import com.example.netraai.detection.DebugOverlay
+import com.example.netraai.detection.DetectionProfile
 import com.example.netraai.detection.DetectedObstacle
 import com.example.netraai.detection.DetectionSensitivity
 import com.example.netraai.detection.GateStatus
@@ -91,6 +95,7 @@ import com.example.netraai.feedback.AlertEngine
 import com.example.netraai.feedback.FlashlightAutoController
 import com.example.netraai.feedback.FlashlightMode
 import com.example.netraai.ocr.TextReader
+import com.example.netraai.sos.SosMessageBuilder
 import com.example.netraai.ui.SettingsSheet
 import com.example.netraai.ui.theme.DangerRed
 import com.example.netraai.ui.theme.DarkBackground
@@ -104,6 +109,8 @@ import com.example.netraai.ui.theme.TextSecondary
 import com.example.netraai.ui.theme.WalkingGreen
 import com.example.netraai.voice.TtsManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -129,8 +136,10 @@ class MainActivity : ComponentActivity() {
     private var isPermanentlyDenied by mutableStateOf(false)
     private var isWalkingModeActive by mutableStateOf(false)
     private var showSettingsSheet by mutableStateOf(false)
+    private var showConsentDialog by mutableStateOf(false)
     private var currentLanguage by mutableStateOf("en")
     private var isReadingActive by mutableStateOf(false)
+    private var cloudDescribeJob: Job? = null
 
     // Debug overlay data
     private var debugDetections by mutableStateOf<List<DetectedObstacle>>(emptyList())
@@ -246,6 +255,173 @@ class MainActivity : ComponentActivity() {
         return letterCount > 0 && (devanagariCount.toFloat() / letterCount) >= 0.5f
     }
 
+    private fun triggerCloudDescribe() {
+        if (cloudDescribeJob?.isActive == true) {
+            cloudDescribeJob?.cancel()
+            cloudDescribeJob = null
+            val cancelMsg = if (currentLanguage == "hi") "अनुरोध रद्द कर दिया गया" else "Request canceled"
+            ttsManager.speak(cancelMsg, interrupt = true)
+            return
+        }
+
+        lifecycleScope.launch {
+            val consent = preferencesManager.cloudConsentFlow.first()
+            if (consent == "UNSET") {
+                showConsentDialog = true
+                val consentMsg = if (currentLanguage == "hi") {
+                    "तस्वीरें वर्णन के लिए AI सेवा को भेजी जाती हैं। नेत्रा द्वारा इन्हें संग्रहीत नहीं किया जाता।"
+                } else {
+                    "Photos are sent to an AI service to describe them. They are not stored by Netra."
+                }
+                ttsManager.speak(consentMsg, interrupt = true)
+                return@launch
+            }
+            if (consent == "DECLINED") {
+                val declineMsg = if (currentLanguage == "hi") "सुविधा सेटिंग्स में अस्वीकृत है" else "Feature declined in settings"
+                ttsManager.speak(declineMsg, interrupt = true)
+                return@launch
+            }
+
+            val lookMsg = if (currentLanguage == "hi") "देख रहे हैं..." else "Looking..."
+            ttsManager.speak(lookMsg, interrupt = true)
+
+            val capture = imageCapture
+            if (capture == null) {
+                val err = if (currentLanguage == "hi") "कैमरा तैयार नहीं है।" else "Camera not ready."
+                ttsManager.speak(err, interrupt = true)
+                return@launch
+            }
+
+            val photoFile = java.io.File.createTempFile("cloud_capture", ".jpg", cacheDir)
+            val outputOptions = androidx.camera.core.ImageCapture.OutputFileOptions.Builder(photoFile).build()
+
+            cloudDescribeJob = launch(Dispatchers.IO) {
+                try {
+                    capture.takePicture(
+                        outputOptions,
+                        ContextCompat.getMainExecutor(this@MainActivity),
+                        object : androidx.camera.core.ImageCapture.OnImageSavedCallback {
+                            override fun onImageSaved(outputFileResults: androidx.camera.core.ImageCapture.OutputFileResults) {
+                                lifecycleScope.launch(Dispatchers.IO) {
+                                    try {
+                                        val rawBytes = photoFile.readBytes()
+                                        photoFile.delete()
+                                        val scaledBytes = ImageDownscaler.downscaleImage(rawBytes)
+
+                                        val deviceId = preferencesManager.getOrCreateDeviceId()
+                                        val describer = BackendSceneDescriber(BuildConfig.BACKEND_URL)
+                                        val result = describer.describeScene(scaledBytes, deviceId, currentLanguage)
+
+                                        withContext(Dispatchers.Main) {
+                                            if (result.isSuccess) {
+                                                val desc = result.getOrNull() ?: ""
+                                                if (isMostlyDevanagari(desc)) {
+                                                    ttsManager.setLanguage("hi")
+                                                } else {
+                                                    ttsManager.setLanguage(currentLanguage)
+                                                }
+                                                ttsManager.speak(desc, interrupt = true)
+                                            } else {
+                                                val errCode = result.exceptionOrNull()?.message ?: ""
+                                                val spokenErr = when (errCode) {
+                                                    "RATE_LIMITED" -> if (currentLanguage == "hi") "अत्यधिक अनुरोध, कृपया एक मिनट प्रतीक्षा करें" else "Too many requests, please wait a minute"
+                                                    "SERVICE_UNAVAILABLE" -> if (currentLanguage == "hi") "सेवा अस्थायी रूप से अनुपलब्ध है" else "Service temporarily unavailable"
+                                                    "TIMEOUT" -> if (currentLanguage == "hi") "समय समाप्त हो गया, कृपया पुन: प्रयास करें" else "Request timed out, please try again"
+                                                    "NO_INTERNET" -> if (currentLanguage == "hi") "इंटरनेट कनेक्शन नहीं है" else "No internet connection"
+                                                    else -> if (currentLanguage == "hi") "वर्णन प्राप्त करने में त्रुटि।" else "Error describing scene."
+                                                }
+                                                ttsManager.speak(spokenErr, interrupt = true)
+                                            }
+                                        }
+                                    } catch (_: Exception) {
+                                        photoFile.delete()
+                                        withContext(Dispatchers.Main) {
+                                            val err = if (currentLanguage == "hi") "वर्णन प्राप्त करने में त्रुटि।" else "Error describing scene."
+                                            ttsManager.speak(err, interrupt = true)
+                                        }
+                                    }
+                                }
+                            }
+
+                            override fun onError(exception: androidx.camera.core.ImageCaptureException) {
+                                photoFile.delete()
+                                lifecycleScope.launch(Dispatchers.Main) {
+                                    val err = if (currentLanguage == "hi") "कैमरा त्रुटि।" else "Camera capture error."
+                                    ttsManager.speak(err, interrupt = true)
+                                }
+                            }
+                        }
+                    )
+                } catch (_: Exception) {
+                    photoFile.delete()
+                }
+            }
+        }
+    }
+
+    private fun triggerSos() {
+        lifecycleScope.launch {
+            val contactNumber = preferencesManager.emergencyContactNumberFlow.first()
+
+            if (contactNumber.isBlank()) {
+                val msg = if (currentLanguage == "hi") "कोई आपातकालीन संपर्क सहेजा नहीं गया है। कृपया सेटिंग्स में सेट करें।" else "No emergency contact saved. Ask someone to set it in settings."
+                ttsManager.speak(msg, interrupt = true)
+                return@launch
+            }
+
+            val hasSms = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED
+            val hasLoc = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                    ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+            if (!hasSms || !hasLoc) {
+                val msg = if (currentLanguage == "hi") "एसओएस के लिए एसएमएस और लोकेशन अनुमतियां आवश्यक हैं।" else "SMS and location permissions are required for SOS."
+                ttsManager.speak(msg, interrupt = true)
+                requestPermissionLauncher.launch(arrayOf(Manifest.permission.SEND_SMS, Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+                return@launch
+            }
+
+            val locationManager = getSystemService(Context.LOCATION_SERVICE) as? android.location.LocationManager
+            var lat: Double? = null
+            var lng: Double? = null
+            var isLastKnown = false
+
+            try {
+                val loc = locationManager?.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER)
+                    ?: locationManager?.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER)
+                if (loc != null) {
+                    lat = loc.latitude
+                    lng = loc.longitude
+                    isLastKnown = true
+                }
+            } catch (_: SecurityException) {}
+
+            val smsMessage = SosMessageBuilder.buildMessage(lat, lng, isLastKnown)
+
+            try {
+                val smsManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    getSystemService(android.telephony.SmsManager::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    android.telephony.SmsManager.getDefault()
+                }
+
+                val parts = smsManager.divideMessage(smsMessage)
+                if (parts.size > 1) {
+                    smsManager.sendMultipartTextMessage(contactNumber, null, parts, null, null)
+                } else {
+                    smsManager.sendTextMessage(contactNumber, null, smsMessage, null, null)
+                }
+
+                triggerDangerHaptic()
+                val successMsg = if (currentLanguage == "hi") "एसओएस भेजा गया" else "SOS sent"
+                ttsManager.speak(successMsg, interrupt = true)
+            } catch (e: Exception) {
+                val failMsg = if (currentLanguage == "hi") "एसओएस विफल" else "SOS failed"
+                ttsManager.speak(failMsg, interrupt = true)
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -348,6 +524,18 @@ class MainActivity : ComponentActivity() {
         }
 
         lifecycleScope.launch {
+            preferencesManager.detectionProfileFlow.collect { profile ->
+                detectorHelper.detectionProfile = profile
+            }
+        }
+
+        lifecycleScope.launch {
+            preferencesManager.allObjectsModeFlow.collect { allObj ->
+                detectorHelper.allObjectsMode = allObj
+            }
+        }
+
+        lifecycleScope.launch {
             val isFirst = preferencesManager.isFirstLaunch()
             val greeting = if (isFirst) {
                 preferencesManager.setFirstLaunchCompleted()
@@ -381,6 +569,10 @@ class MainActivity : ComponentActivity() {
                 val isDebugOverlayState by preferencesManager.debugOverlayFlow.collectAsState(initial = false)
                 val sensitivityState by preferencesManager.detectionSensitivityFlow.collectAsState(initial = DetectionSensitivity.NORMAL)
                 val distanceCalibrationState by preferencesManager.distanceCalibrationFlow.collectAsState(initial = 1.0f)
+                val detectionProfileState by preferencesManager.detectionProfileFlow.collectAsState(initial = DetectionProfile.BALANCED)
+                val allObjectsModeState by preferencesManager.allObjectsModeFlow.collectAsState(initial = false)
+                val contactNameState by preferencesManager.emergencyContactNameFlow.collectAsState(initial = "")
+                val contactNumberState by preferencesManager.emergencyContactNumberFlow.collectAsState(initial = "")
                 val isDisclaimerDismissedState by preferencesManager.isDisclaimerDismissedFlow.collectAsState(initial = false)
 
                 val localView = LocalView.current
@@ -421,6 +613,7 @@ class MainActivity : ComponentActivity() {
                                 gateStatus = debugGateStatus,
                                 angularSpeed = debugAngularSpeed,
                                 sharpnessScore = debugSharpnessScore,
+                                detectionProfile = detectionProfileState,
                                 lastWhyReason = debugWhyReason
                             )
                         }
@@ -629,6 +822,10 @@ class MainActivity : ComponentActivity() {
                                             }
                                         }
                                     },
+                                    onCloudDescribeClicked = {
+                                        localView.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                                        triggerCloudDescribe()
+                                    },
                                     onCycleFlashlight = {
                                         localView.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                                         val nextMode = when (flashlightModeState) {
@@ -664,11 +861,14 @@ class MainActivity : ComponentActivity() {
                                         val msg = if (newLang == "hi") "हिंदी भाषा चयनित" else "English selected"
                                         ttsManager.speak(msg)
                                     },
-                                    onSosClicked = {
-                                        localView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                                        triggerDangerHaptic()
-                                        val msg = if (currentLanguageState == "hi") "आपातकालीन एसओएस सुविधा शीघ्र उपलब्ध होगी।" else "Emergency SOS feature coming soon."
+                                    onSosTap = {
+                                        localView.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                                        val msg = if (currentLanguageState == "hi") "एसओएस भेजने के लिए दबाकर रखें" else "Hold to send SOS"
                                         ttsManager.speak(msg, interrupt = true)
+                                    },
+                                    onSosLongPress = {
+                                        localView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                        triggerSos()
                                     },
                                     onOpenSettings = {
                                         localView.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
@@ -676,6 +876,30 @@ class MainActivity : ComponentActivity() {
                                     }
                                 )
                             }
+                        }
+
+                        // First-Use Consent Dialog
+                        if (showConsentDialog) {
+                            ConsentDialog(
+                                isHindi = currentLanguageState == "hi",
+                                onAccept = {
+                                    showConsentDialog = false
+                                    lifecycleScope.launch {
+                                        preferencesManager.setCloudConsent("ACCEPTED")
+                                        val accMsg = if (currentLanguageState == "hi") "स्वीकृत" else "Accepted"
+                                        ttsManager.speak(accMsg, interrupt = true)
+                                        triggerCloudDescribe()
+                                    }
+                                },
+                                onDecline = {
+                                    showConsentDialog = false
+                                    lifecycleScope.launch {
+                                        preferencesManager.setCloudConsent("DECLINED")
+                                        val decMsg = if (currentLanguageState == "hi") "सुविधा सेटिंग्स में अस्वीकृत है" else "Feature declined in settings"
+                                        ttsManager.speak(decMsg, interrupt = true)
+                                    }
+                                }
+                            )
                         }
 
                         // Settings Bottom Sheet
@@ -687,6 +911,10 @@ class MainActivity : ComponentActivity() {
                                 isDebugOverlayEnabled = isDebugOverlayState,
                                 detectionSensitivity = sensitivityState,
                                 distanceCalibration = distanceCalibrationState,
+                                detectionProfile = detectionProfileState,
+                                isAllObjectsMode = allObjectsModeState,
+                                emergencyContactName = contactNameState,
+                                emergencyContactNumber = contactNumberState,
                                 onLanguageChange = { lang ->
                                     lifecycleScope.launch { preferencesManager.setLanguage(lang) }
                                 },
@@ -711,6 +939,15 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onDistanceCalibrationChange = { mult ->
                                     lifecycleScope.launch { preferencesManager.setDistanceCalibration(mult) }
+                                },
+                                onDetectionProfileChange = { profile ->
+                                    lifecycleScope.launch { preferencesManager.setDetectionProfile(profile) }
+                                },
+                                onAllObjectsModeChange = { allObj ->
+                                    lifecycleScope.launch { preferencesManager.setAllObjectsMode(allObj) }
+                                },
+                                onSaveEmergencyContact = { name, number ->
+                                    lifecycleScope.launch { preferencesManager.setEmergencyContact(name, number) }
                                 },
                                 onDismiss = { showSettingsSheet = false }
                             )
@@ -759,6 +996,53 @@ class MainActivity : ComponentActivity() {
 // ======================================================================================
 // COMPOSABLE UI COMPONENTS (Professional WCAG AA Dark Design)
 // ======================================================================================
+
+@Composable
+private fun ConsentDialog(
+    isHindi: Boolean,
+    onAccept: () -> Unit,
+    onDecline: () -> Unit
+) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = {},
+        title = {
+            Text(
+                text = if (isHindi) "AI क्लाउड वर्णन सहमति" else "AI Cloud Description Consent",
+                color = TextPrimary
+            )
+        },
+        text = {
+            Text(
+                text = if (isHindi) {
+                    "तस्वीरें वर्णन के लिए AI सेवा को भेजी जाती हैं। नेत्रा द्वारा इन्हें संग्रहीत नहीं किया जाता। AI गलत हो सकता है; सुरक्षा के लिए इस पर भरोसा न करें।"
+                } else {
+                    "Photos are sent to an AI service to describe them. They are not stored by Netra. AI can be wrong; do not rely on it for safety."
+                },
+                color = TextSecondary,
+                fontSize = 16.sp
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = onAccept,
+                colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
+                modifier = Modifier.height(56.dp).semantics { contentDescription = if (isHindi) "स्वीकार करें" else "Accept consent" }
+            ) {
+                Text(text = if (isHindi) "स्वीकार करें" else "Accept", color = Color.Black, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            Button(
+                onClick = onDecline,
+                colors = ButtonDefaults.buttonColors(containerColor = DangerRed),
+                modifier = Modifier.height(56.dp).semantics { contentDescription = if (isHindi) "अस्वीकार करें" else "Decline consent" }
+            ) {
+                Text(text = if (isHindi) "अस्वीकार करें" else "Decline", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            }
+        },
+        containerColor = DarkSurfaceSemiOpaque
+    )
+}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -986,9 +1270,11 @@ private fun BottomControlDock(
     onToggleWalkingMode: () -> Unit,
     onLongClickWalkingMode: () -> Unit,
     onReadTextClicked: () -> Unit,
+    onCloudDescribeClicked: () -> Unit,
     onCycleFlashlight: () -> Unit,
     onToggleLanguage: () -> Unit,
-    onSosClicked: () -> Unit,
+    onSosTap: () -> Unit,
+    onSosLongPress: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
     val isHindi = currentLanguage.equals("hi", ignoreCase = true)
@@ -1159,14 +1445,52 @@ private fun BottomControlDock(
                     }
                 }
 
+                // New "What's ahead?" / "सामने क्या है?" Button (min 72dp)
                 Button(
-                    onClick = onSosClicked,
+                    onClick = onCloudDescribeClicked,
                     contentPadding = PaddingValues(0.dp),
                     modifier = Modifier
                         .weight(1f)
                         .height(72.dp)
                         .semantics {
-                            contentDescription = "SOS emergency assistance button"
+                            contentDescription = if (isHindi) "सामने क्या है?" else "What's ahead?"
+                        },
+                    colors = ButtonDefaults.buttonColors(containerColor = DarkCard),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.RemoveRedEye,
+                            contentDescription = null,
+                            tint = ElectricCyan,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = if (isHindi) "विवरण" else "Ahead",
+                            color = TextPrimary,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
+                        )
+                    }
+                }
+
+                Button(
+                    onClick = onSosTap,
+                    contentPadding = PaddingValues(0.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(72.dp)
+                        .combinedClickable(
+                            onClick = onSosTap,
+                            onLongClick = onSosLongPress
+                        )
+                        .semantics {
+                            contentDescription = if (isHindi) "आपातकालीन एसओएस बटन। टैप करने पर निर्देश मिलेगा, दबाकर रखने पर एसओएस भेजा जाएगा।" else "SOS emergency assistance button. Tap for instructions, long press to send SOS."
                         },
                     colors = ButtonDefaults.buttonColors(containerColor = DarkCard),
                     shape = RoundedCornerShape(16.dp)

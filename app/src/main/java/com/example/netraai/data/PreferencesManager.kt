@@ -8,11 +8,13 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.netraai.detection.DetectionProfile
 import com.example.netraai.detection.DetectionSensitivity
 import com.example.netraai.feedback.FlashlightMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import java.util.UUID
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "netra_preferences")
 
@@ -30,6 +32,12 @@ class PreferencesManager(private val context: Context) {
         val KEY_DEBUG_OVERLAY = booleanPreferencesKey("debug_overlay")
         val KEY_DETECTION_SENSITIVITY = stringPreferencesKey("detection_sensitivity")
         val KEY_DISTANCE_CALIBRATION = floatPreferencesKey("distance_calibration")
+        val KEY_DEVICE_ID = stringPreferencesKey("device_id")
+        val KEY_CLOUD_CONSENT = stringPreferencesKey("cloud_consent")
+        val KEY_DETECTION_PROFILE = stringPreferencesKey("detection_profile")
+        val KEY_ALL_OBJECTS_MODE = booleanPreferencesKey("all_objects_mode")
+        val KEY_EMERGENCY_CONTACT_NAME = stringPreferencesKey("emergency_contact_name")
+        val KEY_EMERGENCY_CONTACT_NUMBER = stringPreferencesKey("emergency_contact_number")
     }
 
     val isFirstLaunchFlow: Flow<Boolean> = context.dataStore.data.map { preferences ->
@@ -64,6 +72,34 @@ class PreferencesManager(private val context: Context) {
         preferences[KEY_DISTANCE_CALIBRATION] ?: 1.0f
     }
 
+    val cloudConsentFlow: Flow<String> = context.dataStore.data.map { preferences ->
+        preferences[KEY_CLOUD_CONSENT] ?: "UNSET"
+    }
+
+    val detectionProfileFlow: Flow<DetectionProfile> = context.dataStore.data.map { preferences ->
+        DetectionProfile.fromString(preferences[KEY_DETECTION_PROFILE] ?: "BALANCED")
+    }
+
+    val allObjectsModeFlow: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[KEY_ALL_OBJECTS_MODE] ?: false
+    }
+
+    val emergencyContactNameFlow: Flow<String> = context.dataStore.data.map { preferences ->
+        preferences[KEY_EMERGENCY_CONTACT_NAME] ?: ""
+    }
+
+    val emergencyContactNumberFlow: Flow<String> = context.dataStore.data.map { preferences ->
+        preferences[KEY_EMERGENCY_CONTACT_NUMBER] ?: ""
+    }
+
+    suspend fun getOrCreateDeviceId(): String {
+        val existing = context.dataStore.data.first()[KEY_DEVICE_ID]
+        if (!existing.isNullOrEmpty()) return existing
+        val newId = UUID.randomUUID().toString()
+        context.dataStore.edit { it[KEY_DEVICE_ID] = newId }
+        return newId
+    }
+
     suspend fun isFirstLaunch(): Boolean = isFirstLaunchFlow.first()
 
     suspend fun setFirstLaunchCompleted() {
@@ -96,5 +132,24 @@ class PreferencesManager(private val context: Context) {
 
     suspend fun setDistanceCalibration(multiplier: Float) {
         context.dataStore.edit { it[KEY_DISTANCE_CALIBRATION] = multiplier.coerceIn(0.5f, 2.0f) }
+    }
+
+    suspend fun setCloudConsent(consent: String) {
+        context.dataStore.edit { it[KEY_CLOUD_CONSENT] = consent }
+    }
+
+    suspend fun setDetectionProfile(profile: DetectionProfile) {
+        context.dataStore.edit { it[KEY_DETECTION_PROFILE] = profile.name }
+    }
+
+    suspend fun setAllObjectsMode(enabled: Boolean) {
+        context.dataStore.edit { it[KEY_ALL_OBJECTS_MODE] = enabled }
+    }
+
+    suspend fun setEmergencyContact(name: String, number: String) {
+        context.dataStore.edit {
+            it[KEY_EMERGENCY_CONTACT_NAME] = name
+            it[KEY_EMERGENCY_CONTACT_NUMBER] = number
+        }
     }
 }

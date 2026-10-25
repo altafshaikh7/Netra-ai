@@ -23,6 +23,8 @@ class ObjectDetectorHelper(
     modelAssetName: String = DEFAULT_MODEL_NAME,
     var sensitivity: DetectionSensitivity = DetectionSensitivity.NORMAL,
     var calibrationMultiplier: Float = 1.0f,
+    var detectionProfile: DetectionProfile = DetectionProfile.BALANCED,
+    var allObjectsMode: Boolean = false,
     var onWhyLogged: ((String) -> Unit)? = null,
     val distanceEstimator: DistanceEstimator = DistanceEstimator()
 ) {
@@ -140,7 +142,7 @@ class ObjectDetectorHelper(
         // Upright dimensions after rotation
         val isRotatedSideways = (rotationDegrees == 90 || rotationDegrees == 270)
         val uprightWidth = if (isRotatedSideways) rawHeight else rawWidth
-        val uprightHeight = if (isRotatedSideways) rawWidth else rawHeight
+        val uprightHeight = if (isRotatedSideways) rawWidth else rawWidth
         val frameArea = uprightWidth * uprightHeight
 
         val focalLengthPixels = getFocalLengthPixels(uprightWidth, uprightHeight)
@@ -148,6 +150,8 @@ class ObjectDetectorHelper(
 
         // Call beginFrame ONCE per detect() before the detection loop
         distanceMetersEstimator.beginFrame()
+
+        val profileValues = DetectionProfileValues.forProfile(detectionProfile)
 
         val startTime = System.currentTimeMillis()
 
@@ -171,7 +175,16 @@ class ObjectDetectorHelper(
                     "Raw detection: label=$label, score=${String.format("%.2f", score)}, box=[L:${box.left.toInt()}, T:${box.top.toInt()}, R:${box.right.toInt()}, B:${box.bottom.toInt()}]"
                 )
 
-                val rejectReason = DetectionFilter.rejectReason(label, score, box, uprightWidth, uprightHeight, sensitivity)
+                val rejectReason = DetectionFilter.rejectReason(
+                    label = label,
+                    score = score,
+                    box = box,
+                    uprightWidth = uprightWidth,
+                    uprightHeight = uprightHeight,
+                    sensitivity = sensitivity,
+                    profileValues = profileValues,
+                    allObjectsMode = allObjectsMode
+                )
                 if (rejectReason != null) {
                     Log.d("NetraWhy", "Rejected: label=$label, reason=$rejectReason")
                     onWhyLogged?.invoke(rejectReason)
