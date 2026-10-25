@@ -41,6 +41,14 @@ class AlertEngine(
         pathGuidance = pathGuidance
     )
 
+    fun onGateStatus(gateStatus: GateStatus, language: String, currentTimeMs: Long = System.currentTimeMillis()) {
+        val guidanceSentence = pathGuidance.evaluateGuidanceSentence(emptyList(), gateStatus, language, currentTimeMs)
+        if (guidanceSentence != null) {
+            val isUrgent = guidanceSentence.contains("Stop") || guidanceSentence.contains("रुकें")
+            speakAction(guidanceSentence, isUrgent)
+        }
+    }
+
     fun processObstacles(
         obstacles: List<DetectedObstacle>,
         language: String,
@@ -51,6 +59,8 @@ class AlertEngine(
         if (guidanceSentence != null) {
             val isUrgent = guidanceSentence.contains("Stop") || guidanceSentence.contains("रुकें")
             speakAction(guidanceSentence, isUrgent)
+            // Item 2b: Do not also speak single-obstacle alert if guidance spoke this frame
+            return null
         }
 
         if (obstacles.isEmpty()) return null

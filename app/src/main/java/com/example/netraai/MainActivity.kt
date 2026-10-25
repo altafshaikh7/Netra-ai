@@ -26,6 +26,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -66,10 +67,12 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -108,11 +111,15 @@ import com.example.netraai.ui.theme.TextPrimary
 import com.example.netraai.ui.theme.TextSecondary
 import com.example.netraai.ui.theme.WalkingGreen
 import com.example.netraai.voice.TtsManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
 
 class MainActivity : ComponentActivity() {
 
@@ -138,10 +145,10 @@ class MainActivity : ComponentActivity() {
     private var isWalkingModeActive by mutableStateOf(false)
     private var showSettingsSheet by mutableStateOf(false)
     private var showConsentDialog by mutableStateOf(false)
+    private var showBenchmarkScreen by mutableStateOf(false)
     private var currentLanguage by mutableStateOf("en")
     private var isReadingActive by mutableStateOf(false)
     private var cloudDescribeJob: Job? = null
-    private var cloudRequestId = 0
 
     // Debug overlay data
     private var debugDetections by mutableStateOf<List<DetectedObstacle>>(emptyList())
@@ -315,98 +322,90 @@ class MainActivity : ComponentActivity() {
                 return@launch
             }
 
-            val currentReqId = ++cloudRequestId
-            val photoFile = java.io.File.createTempFile("cloud_capture", ".jpg", cacheDir)
-            val outputOptions = androidx.camera.core.ImageCapture.OutputFileOptions.Builder(photoFile).build()
-
             val wasWalking = isWalkingModeActive
             if (wasWalking) {
                 isWalkingModeActive = false
                 walkingModeAnalyzer.isWalkingModeEnabled = false
             }
 
+            var tempFile: java.io.File? = null
+
             cloudDescribeJob = launch(Dispatchers.IO) {
                 try {
-                    capture.takePicture(
-                        outputOptions,
-                        ContextCompat.getMainExecutor(this@MainActivity),
-                        object : androidx.camera.core.ImageCapture.OnImageSavedCallback {
-                            override fun onImageSaved(outputFileResults: androidx.camera.core.ImageCapture.OutputFileResults) {
-                                lifecycleScope.launch(Dispatchers.IO) {
+                    val photoFile = java.io.File.createTempFile("cloud_capture", ".jpg", cacheDir)
+                    tempFile = photoFile
+
+                    val rawBytes = suspendCancellableCoroutine<ByteArray> { continuation ->
+                        val outputOptions = androidx.camera.core.ImageCapture.OutputFileOptions.Builder(photoFile).build()
+                        capture.takePicture(
+                            outputOptions,
+                            ContextCompat.getMainExecutor(this@MainActivity),
+                            object : androidx.camera.core.ImageCapture.OnImageSavedCallback {
+                                override fun onImageSaved(outputFileResults: androidx.camera.core.ImageCapture.OutputFileResults) {
                                     try {
-                                        if (currentReqId != cloudRequestId) {
-                                            photoFile.delete()
-                                            return@launch
+                                        val bytes = photoFile.readBytes()
+                                        if (continuation.isActive) {
+                                            continuation.resume(bytes)
                                         }
-
-                                        val rawBytes = photoFile.readBytes()
-                                        photoFile.delete()
-                                        val scaledBytes = ImageDownscaler.downscaleImage(rawBytes)
-
-                                        val deviceId = preferencesManager.getOrCreateDeviceId()
-                                        val describer = BackendSceneDescriber(BuildConfig.BACKEND_URL)
-                                        val result = describer.describeScene(scaledBytes, deviceId, currentLanguage)
-
-                                        withContext(Dispatchers.Main) {
-                                            if (currentReqId == cloudRequestId) {
-                                                if (wasWalking) {
-                                                    isWalkingModeActive = true
-                                                    walkingModeAnalyzer.isWalkingModeEnabled = true
-                                                }
-
-                                                if (result.isSuccess) {
-                                                    val desc = result.getOrNull() ?: ""
-                                                    if (isMostlyDevanagari(desc)) {
-                                                        ttsManager.setLanguage("hi")
-                                                    } else {
-                                                        ttsManager.setLanguage(currentLanguage)
-                                                    }
-                                                    ttsManager.speak(desc, interrupt = true)
-                                                } else {
-                                                    val errCode = result.exceptionOrNull()?.message ?: ""
-                                                    val spokenErr = when (errCode) {
-                                                        "RATE_LIMITED" -> if (currentLanguage == "hi") "अत्यधिक अनुरोध, कृपया एक मिनट प्रतीक्षा करें" else "Too many requests, please wait a minute"
-                                                        "SERVICE_UNAVAILABLE" -> if (currentLanguage == "hi") "सेवा अस्थायी रूप से अनुपलब्ध है" else "Service temporarily unavailable"
-                                                        "TIMEOUT" -> if (currentLanguage == "hi") "समय समाप्त हो गया, कृपया पुन: प्रयास करें" else "Request timed out, please try again"
-                                                        "NO_INTERNET" -> if (currentLanguage == "hi") "इंटरनेट कनेक्शन नहीं है" else "No internet connection"
-                                                        else -> if (currentLanguage == "hi") "वर्णन प्राप्त करने में त्रुटि।" else "Error describing scene."
-                                                    }
-                                                    ttsManager.speak(spokenErr, interrupt = true)
-                                                }
-                                            }
-                                        }
-                                    } catch (_: Exception) {
-                                        photoFile.delete()
-                                        withContext(Dispatchers.Main) {
-                                            if (wasWalking) {
-                                                isWalkingModeActive = true
-                                                walkingModeAnalyzer.isWalkingModeEnabled = true
-                                            }
-                                            val err = if (currentLanguage == "hi") "वर्णन प्राप्त करने में त्रुटि।" else "Error describing scene."
-                                            ttsManager.speak(err, interrupt = true)
+                                    } catch (e: Exception) {
+                                        if (continuation.isActive) {
+                                            continuation.resumeWith(Result.failure(e))
                                         }
                                     }
                                 }
-                            }
 
-                            override fun onError(exception: androidx.camera.core.ImageCaptureException) {
-                                photoFile.delete()
-                                lifecycleScope.launch(Dispatchers.Main) {
-                                    if (wasWalking) {
-                                        isWalkingModeActive = true
-                                        walkingModeAnalyzer.isWalkingModeEnabled = true
+                                override fun onError(exception: androidx.camera.core.ImageCaptureException) {
+                                    if (continuation.isActive) {
+                                        continuation.resumeWith(Result.failure(exception))
                                     }
-                                    val err = if (currentLanguage == "hi") "कैमरा त्रुटि।" else "Camera capture error."
-                                    ttsManager.speak(err, interrupt = true)
                                 }
                             }
+                        )
+                    }
+
+                    val scaledBytes = ImageDownscaler.downscaleImage(rawBytes)
+                    val deviceId = preferencesManager.getOrCreateDeviceId()
+                    val describer = BackendSceneDescriber(BuildConfig.BACKEND_URL)
+                    val result = describer.describeScene(scaledBytes, deviceId, currentLanguage)
+
+                    withContext(Dispatchers.Main) {
+                        if (result.isSuccess) {
+                            val desc = result.getOrNull() ?: ""
+                            if (isMostlyDevanagari(desc)) {
+                                ttsManager.setLanguage("hi")
+                            } else {
+                                ttsManager.setLanguage(currentLanguage)
+                            }
+                            ttsManager.speak(desc, interrupt = true)
+                        } else {
+                            val errCode = result.exceptionOrNull()?.message ?: ""
+                            val spokenErr = when (errCode) {
+                                "RATE_LIMITED" -> if (currentLanguage == "hi") "अत्यधिक अनुरोध, कृपया एक मिनट प्रतीक्षा करें" else "Too many requests, please wait a minute"
+                                "SERVICE_UNAVAILABLE" -> if (currentLanguage == "hi") "सेवा अस्थायी रूप से अनुपलब्ध है" else "Service temporarily unavailable"
+                                "TIMEOUT" -> if (currentLanguage == "hi") "समय समाप्त हो गया, कृपया पुन: प्रयास करें" else "Request timed out, please try again"
+                                "NO_INTERNET" -> if (currentLanguage == "hi") "इंटरनेट कनेक्शन नहीं है" else "No internet connection"
+                                else -> if (currentLanguage == "hi") "वर्णन प्राप्त करने में त्रुटि।" else "Error describing scene."
+                            }
+                            ttsManager.speak(spokenErr, interrupt = true)
                         }
-                    )
+                    }
+                } catch (_: CancellationException) {
+                    withContext(Dispatchers.Main) {
+                        val cancelMsg = if (currentLanguage == "hi") "अनुरोध रद्द कर दिया गया" else "Request canceled"
+                        ttsManager.speak(cancelMsg, interrupt = true)
+                    }
                 } catch (_: Exception) {
-                    photoFile.delete()
-                    if (wasWalking) {
-                        isWalkingModeActive = true
-                        walkingModeAnalyzer.isWalkingModeEnabled = true
+                    withContext(Dispatchers.Main) {
+                        val err = if (currentLanguage == "hi") "वर्णन प्राप्त करने में त्रुटि।" else "Error describing scene."
+                        ttsManager.speak(err, interrupt = true)
+                    }
+                } finally {
+                    tempFile?.delete()
+                    withContext(Dispatchers.Main) {
+                        if (wasWalking) {
+                            isWalkingModeActive = true
+                            walkingModeAnalyzer.isWalkingModeEnabled = true
+                        }
                     }
                 }
             }
@@ -435,7 +434,7 @@ class MainActivity : ComponentActivity() {
             }
 
             triggerDangerHaptic()
-            sosManager.sendSos(contactNumber) { success ->
+            sosManager.requestLocationAndSend(contactNumber) { success ->
                 runOnUiThread {
                     if (success) {
                         val okMsg = if (currentLanguage == "hi") "एसओएस भेजा गया" else "SOS sent"
@@ -479,12 +478,13 @@ class MainActivity : ComponentActivity() {
             },
             onAnalysisComplete = { confirmed, rawAccepted, fps, infMs, uprightW, uprightH, gateState, speed, sharpness ->
                 if (isWalkingModeActive) {
-                    if (isReadingActive) {
-                        android.util.Log.d("NetraWhy", "Skipped alert: REASON=READING_ACTIVE")
-                        runOnUiThread { debugWhyReason = "READING_ACTIVE" }
-                    } else if (gateState.isPaused) {
+                    if (gateState.isPaused) {
+                        alertEngine.onGateStatus(gateState, currentLanguage)
                         android.util.Log.d("NetraWhy", "Skipped alert: REASON=GATE_PAUSED")
                         runOnUiThread { debugWhyReason = "GATE_PAUSED" }
+                    } else if (isReadingActive) {
+                        android.util.Log.d("NetraWhy", "Skipped alert: REASON=READING_ACTIVE")
+                        runOnUiThread { debugWhyReason = "READING_ACTIVE" }
                     } else if (gateState == GateStatus.ACTIVE && !isReadingActive) {
                         lifecycleScope.launch {
                             val nearestMeters = confirmed.minOfOrNull { it.distanceMeters ?: Float.MAX_VALUE }
@@ -676,6 +676,9 @@ class MainActivity : ComponentActivity() {
                                 onOpenSettings = {
                                     localView.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                                     showSettingsSheet = true
+                                },
+                                onLongOpenBenchmark = {
+                                    showBenchmarkScreen = true
                                 }
                             )
 
@@ -937,6 +940,13 @@ class MainActivity : ComponentActivity() {
                             )
                         }
 
+                        // Debug Benchmark Screen
+                        if (showBenchmarkScreen) {
+                            com.example.netraai.benchmark.BenchmarkScreen(
+                                onDismiss = { showBenchmarkScreen = false }
+                            )
+                        }
+
                         // Settings Bottom Sheet
                         if (showSettingsSheet) {
                             SettingsSheet(
@@ -1086,7 +1096,8 @@ private fun TopBarSection(
     language: String,
     flashlightMode: FlashlightMode,
     onToggleDebugOverlay: () -> Unit,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    onLongOpenBenchmark: () -> Unit = {}
 ) {
     val isHindi = language.equals("hi", ignoreCase = true)
 
@@ -1158,14 +1169,18 @@ private fun TopBarSection(
             }
         }
 
-        IconButton(
-            onClick = onOpenSettings,
+        Box(
             modifier = Modifier
                 .size(48.dp)
                 .background(DarkSurfaceSemiOpaque, shape = CircleShape)
+                .combinedClickable(
+                    onClick = onOpenSettings,
+                    onLongClick = onLongOpenBenchmark
+                )
                 .semantics {
                     contentDescription = if (isHindi) "सेटिंग्स खोलें" else "Open settings"
-                }
+                },
+            contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = Icons.Default.Settings,
@@ -1325,6 +1340,8 @@ private fun BottomControlDock(
         animationSpec = tween(250),
         label = "readBtnColor"
     )
+
+    val scope = rememberCoroutineScope()
 
     Card(
         modifier = Modifier
@@ -1522,21 +1539,30 @@ private fun BottomControlDock(
                         }
                     }
 
-                    Button(
-                        onClick = onSosTap,
-                        contentPadding = PaddingValues(0.dp),
+                    Box(
                         modifier = Modifier
                             .weight(1f)
                             .height(72.dp)
-                            .combinedClickable(
-                                onClick = onSosTap,
-                                onLongClick = onSosLongPress
-                            )
+                            .background(DarkCard, shape = RoundedCornerShape(16.dp))
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onTap = { onSosTap() },
+                                    onPress = {
+                                        val job = scope.launch {
+                                            delay(1500L) // 1.5 s hold
+                                            onSosLongPress()
+                                        }
+                                        val released = tryAwaitRelease()
+                                        if (!released || job.isActive) {
+                                            job.cancel()
+                                        }
+                                    }
+                                )
+                            }
                             .semantics {
                                 contentDescription = if (isHindi) "आपातकालीन एसओएस बटन। टैप करने पर निर्देश मिलेगा, दबाकर रखने पर एसओएस भेजा जाएगा।" else "SOS emergency assistance button. Tap for instructions, long press to send SOS."
                             },
-                        colors = ButtonDefaults.buttonColors(containerColor = DarkCard),
-                        shape = RoundedCornerShape(16.dp)
+                        contentAlignment = Alignment.Center
                     ) {
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,

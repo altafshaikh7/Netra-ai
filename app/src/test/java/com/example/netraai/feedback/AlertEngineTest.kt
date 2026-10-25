@@ -30,6 +30,7 @@ class AlertEngineTest {
             },
             isTtsSpeaking = { mockIsSpeaking }
         )
+        alertEngine.pathGuidance.isEnabled = false
     }
 
     @Test
@@ -39,13 +40,15 @@ class AlertEngineTest {
             confidence = 0.9f,
             direction = Direction.AHEAD,
             distance = Distance.VERY_CLOSE,
-            priority = AlertPriority.PRIORITY_1
+            priority = AlertPriority.PRIORITY_1,
+            normalizedCenterX = 0.5f,
+            distanceMeters = 1.0f
         )
 
         val spoken = alertEngine.processObstacles(listOf(car), language = "en")
 
         assertNotNull(spoken)
-        assertEquals("Car ahead, very close.", spokenText)
+        assertEquals("Car ahead, about 1 meters.", spokenText)
         assertEquals(true, wasInterrupted)
     }
 
@@ -57,7 +60,7 @@ class AlertEngineTest {
             direction = Direction.LEFT,
             distance = Distance.NEAR,
             priority = AlertPriority.PRIORITY_2,
-            normalizedCenterX = 0.5f // inside corridor
+            normalizedCenterX = 0.5f
         )
 
         val spoken = alertEngine.processObstacles(listOf(person), language = "en")
@@ -86,7 +89,7 @@ class AlertEngineTest {
 
     @Test
     fun testPriority3SpokenWhenTtsIsIdle() {
-        mockIsSpeaking = false // TTS is idle
+        mockIsSpeaking = false
         val chair = DetectedObstacle(
             label = "chair",
             confidence = 0.85f,
@@ -106,7 +109,7 @@ class AlertEngineTest {
 
     @Test
     fun testPriority3SkippedWhenTtsIsBusy() {
-        mockIsSpeaking = true // TTS is currently speaking
+        mockIsSpeaking = true
         val chair = DetectedObstacle(
             label = "chair",
             confidence = 0.85f,

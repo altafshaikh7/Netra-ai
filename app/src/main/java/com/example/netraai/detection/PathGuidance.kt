@@ -13,12 +13,15 @@ data class ZoneStatus(
 )
 
 class PathGuidance(
-    val timeProvider: () -> Long = { System.currentTimeMillis() }
+    val timeProvider: () -> Long = { System.currentTimeMillis() },
+    val globalRateLimitMs: Long = 2000L,
+    val sameSentenceCooldownMs: Long = 5000L
 ) {
-    private var gateActiveStartTimeMs: Long = 0L
-    private var gatePausedStartTimeMs: Long = 0L
-    private var lastClearSpokenTimeMs: Long = -10000L
-    private var hasSpokenUnsteadyWarning: Boolean = false
+    var isEnabled: Boolean = true
+
+    private var lastSpokenTimeMs: Long = -999999L
+    private var lastSpokenSentence: String = ""
+    private var lastSpokenNearestMeters: Float? = null
 
     fun evaluateZones(obstacles: List<DetectedObstacle>): Map<Zone, ZoneStatus> {
         val leftObs = mutableListOf<DetectedObstacle>()
@@ -65,25 +68,10 @@ class PathGuidance(
         language: String,
         currentTimeMs: Long = timeProvider()
     ): String? {
+        if (!isEnabled) return null
+        if (gateStatus.isPaused) return null
+
         val isHindi = language.equals("hi", ignoreCase = true)
-
-        if (gateStatus.isPaused) {
-            gateActiveStartTimeMs = 0L
-            if (gatePausedStartTimeMs == 0L) {
-                gatePausedStartTimeMs = currentTimeMs
-            } else if (currentTimeMs - gatePausedStartTimeMs >= 2000L && !hasSpokenUnsteadyWarning) {
-                hasSpokenUnsteadyWarning = true
-                return if (isHindi) "कैमरा स्थिर नहीं है, धीरे चलें।" else "Camera not steady, slow down."
-            }
-            return null
-        } else {
-            gatePausedStartTimeMs = 0L
-            hasSpokenUnsteadyWarning = false
-            if (gateActiveStartTimeMs == 0L) {
-                gateActiveStartTimeMs = currentTimeMs
-            }
-        }
-
         val zones = evaluateZones(obstacles)
         val centerBlocked = isZoneBlocked(zones[Zone.CENTER]!!)
         val leftBlocked = isZoneBlocked(zones[Zone.LEFT]!!)
@@ -93,42 +81,59 @@ class PathGuidance(
             val centerObs = zones[Zone.CENTER]!!.nearestObstacle!!
             val labelStr = AlertStrings.getLabel(centerObs.label, language)
             val distMeters = centerObs.distanceMeters
-            val metersStr = if (distMeters != null) {
-                if (distMeters == distMeters.toInt().toFloat()) "${distMeters.toInt()}" else "$distMeters"
-            } else {
-                null
+
+            val rawSentence = when {
+                leftBlocked && rightBlocked -> if (isHindi) "रुकें।" else "Stop."
+                else -> {
+                    val metersStr = if (distMeters != null) {
+                        if (distMeters == distMeters.toInt().toFloat()) "${distMeters.toInt()}" else "$distMeters"
+                    } else {
+                        null
+                    }
+                    if (isHindi) {
+                        if (metersStr != null) "$labelStr सामने, करीब $metersStr मीटर।" else "$labelStr सामने, पास।"
+                    } else {
+                        if (metersStr != null) "$labelStr ahead, about $metersStr meters." else "$labelStr ahead, close."
+                    }
+                }
             }
 
-            val prefix = if (isHindi) {
-                if (metersStr != null) "$labelStr सामने, करीब $metersStr मीटर।" else "$labelStr सामने, पास।"
-            } else {
-                if (metersStr != null) "$labelStr ahead, about $metersStr meters." else "$labelStr ahead, close."
+            if (shouldSpeak(rawSentence, distMeters, currentTimeMs)) {
+                recordSpoken(rawSentence, distMeters, currentTimeMs)
+                return rawSentence
             }
-
-            return when {
-                !leftBlocked -> "$prefix ${if (isHindi) "बायां रास्ता साफ़ लग रहा है।" else "Left looks clear."}"
-                !rightBlocked -> "$prefix ${if (isHindi) "दायां रास्ता साफ़ लग रहा है।" else "Right looks clear."}"
-                else -> if (isHindi) "रुकें।" else "Stop."
-            }
-        }
-
-        val activeDuration = currentTimeMs - gateActiveStartTimeMs
-        val elapsedClearSpoken = currentTimeMs - lastClearSpokenTimeMs
-
-        val corridorEmpty = obstacles.none { CorridorFilter.isValidForAlert(it) }
-
-        if (activeDuration >= 4000L && corridorEmpty && elapsedClearSpoken >= 10000L) {
-            lastClearSpokenTimeMs = currentTimeMs
-            return if (isHindi) "रास्ता साफ़ लग रहा है।" else "Path looks clear."
         }
 
         return null
     }
 
+    private fun shouldSpeak(sentence: String, currentNearestMeters: Float?, currentTimeMs: Long): Boolean {
+        val elapsedGlobal = currentTimeMs - lastSpokenTimeMs
+        if (elapsedGlobal < globalRateLimitMs) return false
+
+        if (sentence == lastSpokenSentence) {
+            val elapsedSentence = currentTimeMs - lastSpokenTimeMs
+            val droppedMeters = if (currentNearestMeters != null && lastSpokenNearestMeters != null) {
+                lastSpokenNearestMeters!! - currentNearestMeters >= 1.0f
+            } else false
+
+            if (!droppedMeters && elapsedSentence < sameSentenceCooldownMs) {
+                return false
+            }
+        }
+
+        return true
+    }
+
+    private fun recordSpoken(sentence: String, currentNearestMeters: Float?, currentTimeMs: Long) {
+        lastSpokenTimeMs = currentTimeMs
+        lastSpokenSentence = sentence
+        lastSpokenNearestMeters = currentNearestMeters
+    }
+
     fun reset() {
-        gateActiveStartTimeMs = 0L
-        gatePausedStartTimeMs = 0L
-        lastClearSpokenTimeMs = -10000L
-        hasSpokenUnsteadyWarning = false
+        lastSpokenTimeMs = -999999L
+        lastSpokenSentence = ""
+        lastSpokenNearestMeters = null
     }
 }

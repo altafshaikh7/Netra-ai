@@ -139,10 +139,7 @@ class ObjectDetectorHelper(
         val rawHeight = bitmap.height.toFloat()
         if (rawWidth <= 0f || rawHeight <= 0f) return emptyList()
 
-        // Upright dimensions after rotation
-        val isRotatedSideways = (rotationDegrees == 90 || rotationDegrees == 270)
-        val uprightWidth = if (isRotatedSideways) rawHeight else rawWidth
-        val uprightHeight = if (isRotatedSideways) rawWidth else rawWidth
+        val (uprightWidth, uprightHeight) = computeUprightSize(rawWidth, rawHeight, rotationDegrees)
         val frameArea = uprightWidth * uprightHeight
 
         val focalLengthPixels = getFocalLengthPixels(uprightWidth, uprightHeight)
@@ -267,7 +264,13 @@ class ObjectDetectorHelper(
         private const val TAG = "ObjectDetectorHelper"
         const val DEFAULT_MODEL_NAME = "efficientdet_lite2_float32.tflite"
         const val INT8_MODEL_NAME = "efficientdet_lite2.tflite"
-        // Base low threshold passed to MediaPipe to allow sensitivity tuning in Kotlin
         const val BASE_DETECTOR_SCORE_THRESHOLD = 0.35f
+
+        fun computeUprightSize(rawWidth: Float, rawHeight: Float, rotationDegrees: Int): Pair<Float, Float> {
+            val isRotatedSideways = (rotationDegrees == 90 || rotationDegrees == 270)
+            val uprightWidth = if (isRotatedSideways) rawHeight else rawWidth
+            val uprightHeight = if (isRotatedSideways) rawWidth else rawHeight
+            return Pair(uprightWidth, uprightHeight)
+        }
     }
 }

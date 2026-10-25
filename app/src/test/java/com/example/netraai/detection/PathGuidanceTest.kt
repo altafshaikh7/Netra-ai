@@ -32,13 +32,12 @@ class PathGuidanceTest {
     }
 
     @Test
-    fun testCenterBlockedWithLeftClear() {
+    fun testCenterBlockedReturnsObstacleSentence() {
         val centerCar = DetectedObstacle("car", 0.9f, Direction.AHEAD, Distance.NEAR, AlertPriority.PRIORITY_1, normalizedCenterX = 0.5f, distanceMeters = 2.0f)
         val sentence = guidance.evaluateGuidanceSentence(listOf(centerCar), GateStatus.ACTIVE, "en", currentTime)
 
         assertNotNull(sentence)
         assertTrue(sentence!!.contains("Car ahead, about 2 meters."))
-        assertTrue(sentence.contains("Left looks clear."))
     }
 
     @Test
@@ -50,45 +49,34 @@ class PathGuidanceTest {
         val sentence = guidance.evaluateGuidanceSentence(listOf(leftObs, centerObs, rightObs), GateStatus.ACTIVE, "en", currentTime)
 
         assertNotNull(sentence)
-        assertTrue(sentence!!.contains("Stop."))
+        assertEquals("Stop.", sentence)
     }
 
     @Test
-    fun testPathLooksClearContinuousActiveGateFourSeconds() {
-        // At t = 1000ms: gate starts active
-        guidance.evaluateGuidanceSentence(emptyList(), GateStatus.ACTIVE, "en", currentTime)
-
-        // At t = 3000ms (2s active) -> not yet 4s, return null
-        currentTime = 3000L
-        val res2 = guidance.evaluateGuidanceSentence(emptyList(), GateStatus.ACTIVE, "en", currentTime)
-        assertNull(res2)
-
-        // At t = 5000ms (4s active) -> returns "Path looks clear."
-        currentTime = 5000L
-        val res4 = guidance.evaluateGuidanceSentence(emptyList(), GateStatus.ACTIVE, "en", currentTime)
-        assertNotNull(res4)
-        assertEquals("Path looks clear.", res4)
+    fun testNoClearAnnouncementsWhenEmpty() {
+        val res = guidance.evaluateGuidanceSentence(emptyList(), GateStatus.ACTIVE, "en", currentTime)
+        assertNull(res)
     }
 
     @Test
-    fun testPausedGateUnsteadyWarningAfterTwoSeconds() {
-        // Paused gate at t = 1000ms
-        guidance.evaluateGuidanceSentence(emptyList(), GateStatus.PAUSED_MOVING, "en", currentTime)
+    fun testGuidanceRateLimiting() {
+        val car1 = DetectedObstacle("car", 0.9f, Direction.AHEAD, Distance.NEAR, AlertPriority.PRIORITY_1, normalizedCenterX = 0.5f, distanceMeters = 2.0f)
 
-        // At t = 2000ms (1s paused) -> null
-        currentTime = 2000L
-        val res1 = guidance.evaluateGuidanceSentence(emptyList(), GateStatus.PAUSED_MOVING, "en", currentTime)
-        assertNull(res1)
+        // t = 1000ms -> spoke
+        val s1 = guidance.evaluateGuidanceSentence(listOf(car1), GateStatus.ACTIVE, "en", 1000L)
+        assertNotNull(s1)
 
-        // At t = 3100ms (>2s paused) -> speaks "Camera not steady, slow down." once
-        currentTime = 3100L
-        val res2 = guidance.evaluateGuidanceSentence(emptyList(), GateStatus.PAUSED_MOVING, "en", currentTime)
-        assertNotNull(res2)
-        assertEquals("Camera not steady, slow down.", res2)
+        // t = 2000ms (< 2s global limit) -> null
+        val s2 = guidance.evaluateGuidanceSentence(listOf(car1), GateStatus.ACTIVE, "en", 2000L)
+        assertNull(s2)
 
-        // Subsequent paused checks return null
-        currentTime = 4000L
-        val res3 = guidance.evaluateGuidanceSentence(emptyList(), GateStatus.PAUSED_MOVING, "en", currentTime)
-        assertNull(res3)
+        // t = 3500ms (same sentence, distance not dropped by 1m, < 5s cooldown) -> null
+        val s3 = guidance.evaluateGuidanceSentence(listOf(car1), GateStatus.ACTIVE, "en", 3500L)
+        assertNull(s3)
+
+        // t = 3500ms with distance dropped to 0.8m (dropped >= 1m) -> spoke immediately
+        val carCloser = DetectedObstacle("car", 0.9f, Direction.AHEAD, Distance.VERY_CLOSE, AlertPriority.PRIORITY_1, normalizedCenterX = 0.5f, distanceMeters = 0.8f)
+        val s4 = guidance.evaluateGuidanceSentence(listOf(carCloser), GateStatus.ACTIVE, "en", 3500L)
+        assertNotNull(s4)
     }
 }

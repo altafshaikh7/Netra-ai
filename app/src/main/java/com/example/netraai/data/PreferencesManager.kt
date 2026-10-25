@@ -38,6 +38,7 @@ class PreferencesManager(private val context: Context) {
         val KEY_ALL_OBJECTS_MODE = booleanPreferencesKey("all_objects_mode")
         val KEY_EMERGENCY_CONTACT_NAME = stringPreferencesKey("emergency_contact_name")
         val KEY_EMERGENCY_CONTACT_NUMBER = stringPreferencesKey("emergency_contact_number")
+        val KEY_SAFETY_ONBOARDING_ACCEPTED = booleanPreferencesKey("safety_onboarding_accepted")
     }
 
     val isFirstLaunchFlow: Flow<Boolean> = context.dataStore.data.map { preferences ->
@@ -90,6 +91,10 @@ class PreferencesManager(private val context: Context) {
 
     val emergencyContactNumberFlow: Flow<String> = context.dataStore.data.map { preferences ->
         preferences[KEY_EMERGENCY_CONTACT_NUMBER] ?: ""
+    }
+
+    val safetyOnboardingAcceptedFlow: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[KEY_SAFETY_ONBOARDING_ACCEPTED] ?: false
     }
 
     suspend fun getOrCreateDeviceId(): String {
@@ -151,5 +156,9 @@ class PreferencesManager(private val context: Context) {
             it[KEY_EMERGENCY_CONTACT_NAME] = name
             it[KEY_EMERGENCY_CONTACT_NUMBER] = number
         }
+    }
+
+    suspend fun setSafetyOnboardingAccepted(accepted: Boolean) {
+        context.dataStore.edit { it[KEY_SAFETY_ONBOARDING_ACCEPTED] = accepted }
     }
 }
