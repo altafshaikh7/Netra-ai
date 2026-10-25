@@ -23,8 +23,8 @@ enum class GateStatus {
  * Tracks device angular speed via Gyroscope and enforces a settle time after motion stops.
  */
 class MotionGate(
-    val angularSpeedThreshold: Float = DEFAULT_MOTION_THRESHOLD,
-    val settleTimeMs: Long = DEFAULT_SETTLE_TIME_MS,
+    var angularSpeedThreshold: Float = DEFAULT_MOTION_THRESHOLD,
+    var settleTimeMs: Long = DEFAULT_SETTLE_TIME_MS,
     private val timeProvider: () -> Long = { System.currentTimeMillis() }
 ) : SensorEventListener {
 

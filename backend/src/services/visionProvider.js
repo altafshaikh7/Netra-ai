@@ -29,9 +29,13 @@ export async function describeImage({ imageBuffer, mimeType, language, question 
         checkDailyCap();
 
         const apiKey = process.env.VISION_API_KEY;
-        const model = process.env.VISION_MODEL || 'gemini-1.5-flash';
+        const model = process.env.VISION_MODEL;
         if (!apiKey) {
             throw new Error('MISSING_API_KEY');
+        }
+        if (!model) {
+            console.error('VISION_MODEL missing');
+            throw new Error('VISION_MODEL_MISSING');
         }
 
         const langPrompt = language === 'hi'
@@ -47,10 +51,13 @@ export async function describeImage({ imageBuffer, mimeType, language, question 
         const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
 
         try {
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
             const response = await fetch(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-goog-api-key': apiKey
+                },
                 signal: controller.signal,
                 body: JSON.stringify({
                     contents: [{
@@ -60,7 +67,7 @@ export async function describeImage({ imageBuffer, mimeType, language, question 
                         ]
                     }],
                     generationConfig: {
-                        maxOutputTokens: 100,
+                        maxOutputTokens: 400,
                         temperature: 0.2
                     }
                 })
@@ -69,7 +76,8 @@ export async function describeImage({ imageBuffer, mimeType, language, question 
             clearTimeout(timeoutId);
 
             if (!response.ok) {
-                throw new Error(`Provider HTTP ${response.status}`);
+                console.error(response.status);
+                throw new Error('PROVIDER_ERROR');
             }
 
             const data = await response.json();

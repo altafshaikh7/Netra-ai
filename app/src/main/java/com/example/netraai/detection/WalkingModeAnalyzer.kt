@@ -100,6 +100,9 @@ class WalkingModeAnalyzer(
             }
 
             val profileValues = DetectionProfileValues.forProfile(detectorHelper.detectionProfile)
+            motionGate.angularSpeedThreshold = profileValues.motionThresholdRadSec
+            temporalTracker.windowSize = profileValues.trackerWindowSize
+            temporalTracker.minConfirmations = profileValues.trackerMinConfirmations
 
             val angularSpeed = motionGate.currentAngularSpeed
             val motionStatus = motionGate.evaluateStatus(currentTime)

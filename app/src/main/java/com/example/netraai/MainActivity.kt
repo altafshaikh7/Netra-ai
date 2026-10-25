@@ -95,7 +95,7 @@ import com.example.netraai.feedback.AlertEngine
 import com.example.netraai.feedback.FlashlightAutoController
 import com.example.netraai.feedback.FlashlightMode
 import com.example.netraai.ocr.TextReader
-import com.example.netraai.sos.SosMessageBuilder
+import com.example.netraai.sos.SosManager
 import com.example.netraai.ui.SettingsSheet
 import com.example.netraai.ui.theme.DangerRed
 import com.example.netraai.ui.theme.DarkBackground
@@ -121,6 +121,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var alertEngine: AlertEngine
     private lateinit var detectorHelper: ObjectDetectorHelper
     private lateinit var walkingModeAnalyzer: WalkingModeAnalyzer
+    private val sosManager by lazy { SosManager(this) }
     private val flashlightController = FlashlightAutoController()
     private val textReader = TextReader()
 
@@ -140,6 +141,7 @@ class MainActivity : ComponentActivity() {
     private var currentLanguage by mutableStateOf("en")
     private var isReadingActive by mutableStateOf(false)
     private var cloudDescribeJob: Job? = null
+    private var cloudRequestId = 0
 
     // Debug overlay data
     private var debugDetections by mutableStateOf<List<DetectedObstacle>>(emptyList())
@@ -222,6 +224,27 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun triggerHapticForDistance(meters: Float) {
+        try {
+            val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+            } ?: return
+
+            if (meters <= 1.0f) {
+                val effect = VibrationEffect.createWaveform(longArrayOf(0, 150, 80, 250), -1)
+                vibrator.vibrate(effect)
+            } else if (meters <= 2.0f) {
+                val effect = VibrationEffect.createOneShot(100L, VibrationEffect.DEFAULT_AMPLITUDE)
+                vibrator.vibrate(effect)
+            }
+        } catch (_: Exception) {
+            // Ignore
+        }
+    }
+
     private fun applyFlashlightState(desiredState: Boolean, speakAnnouncement: Boolean = false, reason: String = "") {
         if (!hasFlashUnit) {
             if (speakAnnouncement && !hasWarnedNoFlash) {
@@ -269,9 +292,9 @@ class MainActivity : ComponentActivity() {
             if (consent == "UNSET") {
                 showConsentDialog = true
                 val consentMsg = if (currentLanguage == "hi") {
-                    "तस्वीरें वर्णन के लिए AI सेवा को भेजी जाती हैं। नेत्रा द्वारा इन्हें संग्रहीत नहीं किया जाता।"
+                    "तस्वीरें वर्णन के लिए AI सेवा को भेजी जाती हैं। नेत्रा द्वारा इन्हें संग्रहीत नहीं किया जाता। AI गलत हो सकता है; सुरक्षा के लिए इस पर भरोसा न करें।"
                 } else {
-                    "Photos are sent to an AI service to describe them. They are not stored by Netra."
+                    "Photos are sent to an AI service to describe them. They are not stored by Netra. AI can be wrong; do not rely on it for safety."
                 }
                 ttsManager.speak(consentMsg, interrupt = true)
                 return@launch
@@ -292,8 +315,15 @@ class MainActivity : ComponentActivity() {
                 return@launch
             }
 
+            val currentReqId = ++cloudRequestId
             val photoFile = java.io.File.createTempFile("cloud_capture", ".jpg", cacheDir)
             val outputOptions = androidx.camera.core.ImageCapture.OutputFileOptions.Builder(photoFile).build()
+
+            val wasWalking = isWalkingModeActive
+            if (wasWalking) {
+                isWalkingModeActive = false
+                walkingModeAnalyzer.isWalkingModeEnabled = false
+            }
 
             cloudDescribeJob = launch(Dispatchers.IO) {
                 try {
@@ -304,6 +334,11 @@ class MainActivity : ComponentActivity() {
                             override fun onImageSaved(outputFileResults: androidx.camera.core.ImageCapture.OutputFileResults) {
                                 lifecycleScope.launch(Dispatchers.IO) {
                                     try {
+                                        if (currentReqId != cloudRequestId) {
+                                            photoFile.delete()
+                                            return@launch
+                                        }
+
                                         val rawBytes = photoFile.readBytes()
                                         photoFile.delete()
                                         val scaledBytes = ImageDownscaler.downscaleImage(rawBytes)
@@ -313,29 +348,40 @@ class MainActivity : ComponentActivity() {
                                         val result = describer.describeScene(scaledBytes, deviceId, currentLanguage)
 
                                         withContext(Dispatchers.Main) {
-                                            if (result.isSuccess) {
-                                                val desc = result.getOrNull() ?: ""
-                                                if (isMostlyDevanagari(desc)) {
-                                                    ttsManager.setLanguage("hi")
+                                            if (currentReqId == cloudRequestId) {
+                                                if (wasWalking) {
+                                                    isWalkingModeActive = true
+                                                    walkingModeAnalyzer.isWalkingModeEnabled = true
+                                                }
+
+                                                if (result.isSuccess) {
+                                                    val desc = result.getOrNull() ?: ""
+                                                    if (isMostlyDevanagari(desc)) {
+                                                        ttsManager.setLanguage("hi")
+                                                    } else {
+                                                        ttsManager.setLanguage(currentLanguage)
+                                                    }
+                                                    ttsManager.speak(desc, interrupt = true)
                                                 } else {
-                                                    ttsManager.setLanguage(currentLanguage)
+                                                    val errCode = result.exceptionOrNull()?.message ?: ""
+                                                    val spokenErr = when (errCode) {
+                                                        "RATE_LIMITED" -> if (currentLanguage == "hi") "अत्यधिक अनुरोध, कृपया एक मिनट प्रतीक्षा करें" else "Too many requests, please wait a minute"
+                                                        "SERVICE_UNAVAILABLE" -> if (currentLanguage == "hi") "सेवा अस्थायी रूप से अनुपलब्ध है" else "Service temporarily unavailable"
+                                                        "TIMEOUT" -> if (currentLanguage == "hi") "समय समाप्त हो गया, कृपया पुन: प्रयास करें" else "Request timed out, please try again"
+                                                        "NO_INTERNET" -> if (currentLanguage == "hi") "इंटरनेट कनेक्शन नहीं है" else "No internet connection"
+                                                        else -> if (currentLanguage == "hi") "वर्णन प्राप्त करने में त्रुटि।" else "Error describing scene."
+                                                    }
+                                                    ttsManager.speak(spokenErr, interrupt = true)
                                                 }
-                                                ttsManager.speak(desc, interrupt = true)
-                                            } else {
-                                                val errCode = result.exceptionOrNull()?.message ?: ""
-                                                val spokenErr = when (errCode) {
-                                                    "RATE_LIMITED" -> if (currentLanguage == "hi") "अत्यधिक अनुरोध, कृपया एक मिनट प्रतीक्षा करें" else "Too many requests, please wait a minute"
-                                                    "SERVICE_UNAVAILABLE" -> if (currentLanguage == "hi") "सेवा अस्थायी रूप से अनुपलब्ध है" else "Service temporarily unavailable"
-                                                    "TIMEOUT" -> if (currentLanguage == "hi") "समय समाप्त हो गया, कृपया पुन: प्रयास करें" else "Request timed out, please try again"
-                                                    "NO_INTERNET" -> if (currentLanguage == "hi") "इंटरनेट कनेक्शन नहीं है" else "No internet connection"
-                                                    else -> if (currentLanguage == "hi") "वर्णन प्राप्त करने में त्रुटि।" else "Error describing scene."
-                                                }
-                                                ttsManager.speak(spokenErr, interrupt = true)
                                             }
                                         }
                                     } catch (_: Exception) {
                                         photoFile.delete()
                                         withContext(Dispatchers.Main) {
+                                            if (wasWalking) {
+                                                isWalkingModeActive = true
+                                                walkingModeAnalyzer.isWalkingModeEnabled = true
+                                            }
                                             val err = if (currentLanguage == "hi") "वर्णन प्राप्त करने में त्रुटि।" else "Error describing scene."
                                             ttsManager.speak(err, interrupt = true)
                                         }
@@ -346,6 +392,10 @@ class MainActivity : ComponentActivity() {
                             override fun onError(exception: androidx.camera.core.ImageCaptureException) {
                                 photoFile.delete()
                                 lifecycleScope.launch(Dispatchers.Main) {
+                                    if (wasWalking) {
+                                        isWalkingModeActive = true
+                                        walkingModeAnalyzer.isWalkingModeEnabled = true
+                                    }
                                     val err = if (currentLanguage == "hi") "कैमरा त्रुटि।" else "Camera capture error."
                                     ttsManager.speak(err, interrupt = true)
                                 }
@@ -354,6 +404,10 @@ class MainActivity : ComponentActivity() {
                     )
                 } catch (_: Exception) {
                     photoFile.delete()
+                    if (wasWalking) {
+                        isWalkingModeActive = true
+                        walkingModeAnalyzer.isWalkingModeEnabled = true
+                    }
                 }
             }
         }
@@ -374,50 +428,23 @@ class MainActivity : ComponentActivity() {
                     ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
             if (!hasSms || !hasLoc) {
-                val msg = if (currentLanguage == "hi") "एसओएस के लिए एसएमएस और लोकेशन अनुमतियां आवश्यक हैं।" else "SMS and location permissions are required for SOS."
-                ttsManager.speak(msg, interrupt = true)
+                val reasonMsg = if (currentLanguage == "hi") "एसओएस के लिए एसएमएस और लोकेशन अनुमतियां आवश्यक हैं।" else "SMS and location permissions are required for SOS."
+                ttsManager.speak(reasonMsg, interrupt = true)
                 requestPermissionLauncher.launch(arrayOf(Manifest.permission.SEND_SMS, Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
                 return@launch
             }
 
-            val locationManager = getSystemService(Context.LOCATION_SERVICE) as? android.location.LocationManager
-            var lat: Double? = null
-            var lng: Double? = null
-            var isLastKnown = false
-
-            try {
-                val loc = locationManager?.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER)
-                    ?: locationManager?.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER)
-                if (loc != null) {
-                    lat = loc.latitude
-                    lng = loc.longitude
-                    isLastKnown = true
+            triggerDangerHaptic()
+            sosManager.sendSos(contactNumber) { success ->
+                runOnUiThread {
+                    if (success) {
+                        val okMsg = if (currentLanguage == "hi") "एसओएस भेजा गया" else "SOS sent"
+                        ttsManager.speak(okMsg, interrupt = true)
+                    } else {
+                        val failMsg = if (currentLanguage == "hi") "एसओएस विफल" else "SOS failed"
+                        ttsManager.speak(failMsg, interrupt = true)
+                    }
                 }
-            } catch (_: SecurityException) {}
-
-            val smsMessage = SosMessageBuilder.buildMessage(lat, lng, isLastKnown)
-
-            try {
-                val smsManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    getSystemService(android.telephony.SmsManager::class.java)
-                } else {
-                    @Suppress("DEPRECATION")
-                    android.telephony.SmsManager.getDefault()
-                }
-
-                val parts = smsManager.divideMessage(smsMessage)
-                if (parts.size > 1) {
-                    smsManager.sendMultipartTextMessage(contactNumber, null, parts, null, null)
-                } else {
-                    smsManager.sendTextMessage(contactNumber, null, smsMessage, null, null)
-                }
-
-                triggerDangerHaptic()
-                val successMsg = if (currentLanguage == "hi") "एसओएस भेजा गया" else "SOS sent"
-                ttsManager.speak(successMsg, interrupt = true)
-            } catch (e: Exception) {
-                val failMsg = if (currentLanguage == "hi") "एसओएस विफल" else "SOS failed"
-                ttsManager.speak(failMsg, interrupt = true)
             }
         }
     }
@@ -460,7 +487,12 @@ class MainActivity : ComponentActivity() {
                         runOnUiThread { debugWhyReason = "GATE_PAUSED" }
                     } else if (gateState == GateStatus.ACTIVE && !isReadingActive) {
                         lifecycleScope.launch {
-                            val spoken = alertEngine.processObstacles(confirmed, currentLanguage)
+                            val nearestMeters = confirmed.minOfOrNull { it.distanceMeters ?: Float.MAX_VALUE }
+                            if (nearestMeters != null && nearestMeters <= 2.0f) {
+                                triggerHapticForDistance(nearestMeters)
+                            }
+
+                            val spoken = alertEngine.processObstacles(confirmed, currentLanguage, gateState)
                             if (spoken != null && spoken.priority == AlertPriority.PRIORITY_1) {
                                 triggerDangerHaptic()
                             }
@@ -526,12 +558,14 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             preferencesManager.detectionProfileFlow.collect { profile ->
                 detectorHelper.detectionProfile = profile
+                alertEngine.detectionProfile = profile
             }
         }
 
         lifecycleScope.launch {
             preferencesManager.allObjectsModeFlow.collect { allObj ->
                 detectorHelper.allObjectsMode = allObj
+                alertEngine.allObjectsMode = allObj
             }
         }
 
@@ -716,8 +750,9 @@ class MainActivity : ComponentActivity() {
                                         if (!isWalkingModeActive) {
                                             isWalkingModeActive = true
                                             walkingModeAnalyzer.isWalkingModeEnabled = true
-                                            val msg = if (currentLanguageState == "hi") "वॉकिंग मोड चालू" else "Walking mode on"
-                                            ttsManager.speak(msg, interrupt = true)
+                                            val msg = if (currentLanguageState == "hi") "वॉकिंग मोड चालू।" else "Walking mode on."
+                                            val caneWarning = if (currentLanguageState == "hi") "मैं सीढ़ियां, गड्ढे या खुले नाले नहीं देख सकता। अपनी छड़ी का प्रयोग करें।" else "I cannot see stairs, drops or open drains. Use your cane."
+                                            ttsManager.speak("$msg $caneWarning", interrupt = true)
 
                                             if (flashlightModeState == FlashlightMode.ON) {
                                                 applyFlashlightState(true)
@@ -1334,218 +1369,227 @@ private fun BottomControlDock(
                 )
             }
 
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Button(
-                    onClick = onCycleFlashlight,
-                    contentPadding = PaddingValues(0.dp),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(72.dp)
-                        .semantics {
-                            contentDescription = "Flashlight mode toggle, current is ${flashlightMode.name}"
-                        },
-                    colors = ButtonDefaults.buttonColors(containerColor = DarkCard),
-                    shape = RoundedCornerShape(16.dp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Icon(
-                            imageVector = when (flashlightMode) {
-                                FlashlightMode.AUTO -> Icons.Default.FlashAuto
-                                FlashlightMode.ON -> Icons.Default.FlashOn
-                                FlashlightMode.OFF -> Icons.Default.FlashOff
+                    Button(
+                        onClick = onCycleFlashlight,
+                        contentPadding = PaddingValues(0.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(72.dp)
+                            .semantics {
+                                contentDescription = "Flashlight mode toggle, current is ${flashlightMode.name}"
                             },
-                            contentDescription = null,
-                            tint = ElectricAmber,
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = flashlightMode.name,
-                            color = TextPrimary,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1
-                        )
+                        colors = ButtonDefaults.buttonColors(containerColor = DarkCard),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = when (flashlightMode) {
+                                    FlashlightMode.AUTO -> Icons.Default.FlashAuto
+                                    FlashlightMode.ON -> Icons.Default.FlashOn
+                                    FlashlightMode.OFF -> Icons.Default.FlashOff
+                                },
+                                contentDescription = null,
+                                tint = ElectricAmber,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = flashlightMode.name,
+                                color = TextPrimary,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
+                            )
+                        }
+                    }
+
+                    Button(
+                        onClick = onToggleLanguage,
+                        contentPadding = PaddingValues(0.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(72.dp)
+                            .semantics {
+                                contentDescription = "Switch language, currently $currentLanguage"
+                            },
+                        colors = ButtonDefaults.buttonColors(containerColor = DarkCard),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Language,
+                                contentDescription = null,
+                                tint = ElectricCyan,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = if (isHindi) "हिंदी" else "EN",
+                                color = TextPrimary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
+                            )
+                        }
+                    }
+
+                    Button(
+                        onClick = onReadTextClicked,
+                        contentPadding = PaddingValues(0.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(72.dp)
+                            .semantics {
+                                contentDescription = if (isReadingActive) {
+                                    if (isHindi) "पढ़ना बंद करें" else "Stop reading text"
+                                } else {
+                                    if (isHindi) "पाठ पढ़ें" else "Read visible text aloud"
+                                }
+                            },
+                        colors = ButtonDefaults.buttonColors(containerColor = readBtnColor),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MenuBook,
+                                contentDescription = null,
+                                tint = ElectricCyan,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = if (isReadingActive) (if (isHindi) "रोकें" else "Stop") else (if (isHindi) "पढ़ें" else "Read"),
+                                color = TextPrimary,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
+                            )
+                        }
                     }
                 }
 
-                Button(
-                    onClick = onToggleLanguage,
-                    contentPadding = PaddingValues(0.dp),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(72.dp)
-                        .semantics {
-                            contentDescription = "Switch language, currently $currentLanguage"
-                        },
-                    colors = ButtonDefaults.buttonColors(containerColor = DarkCard),
-                    shape = RoundedCornerShape(16.dp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
+                    Button(
+                        onClick = onCloudDescribeClicked,
+                        contentPadding = PaddingValues(0.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(72.dp)
+                            .semantics {
+                                contentDescription = if (isHindi) "सामने क्या है?" else "What's ahead?"
+                            },
+                        colors = ButtonDefaults.buttonColors(containerColor = DarkCard),
+                        shape = RoundedCornerShape(16.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Language,
-                            contentDescription = null,
-                            tint = ElectricCyan,
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = if (isHindi) "हिंदी" else "EN",
-                            color = TextPrimary,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1
-                        )
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.RemoveRedEye,
+                                contentDescription = null,
+                                tint = ElectricCyan,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = if (isHindi) "विवरण" else "Ahead",
+                                color = TextPrimary,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
+                            )
+                        }
                     }
-                }
 
-                Button(
-                    onClick = onReadTextClicked,
-                    contentPadding = PaddingValues(0.dp),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(72.dp)
-                        .semantics {
-                            contentDescription = if (isReadingActive) {
-                                if (isHindi) "पढ़ना बंद करें" else "Stop reading text"
-                            } else {
-                                if (isHindi) "पाठ पढ़ें" else "Read visible text aloud"
-                            }
-                        },
-                    colors = ButtonDefaults.buttonColors(containerColor = readBtnColor),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
+                    Button(
+                        onClick = onSosTap,
+                        contentPadding = PaddingValues(0.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(72.dp)
+                            .combinedClickable(
+                                onClick = onSosTap,
+                                onLongClick = onSosLongPress
+                            )
+                            .semantics {
+                                contentDescription = if (isHindi) "आपातकालीन एसओएस बटन। टैप करने पर निर्देश मिलेगा, दबाकर रखने पर एसओएस भेजा जाएगा।" else "SOS emergency assistance button. Tap for instructions, long press to send SOS."
+                            },
+                        colors = ButtonDefaults.buttonColors(containerColor = DarkCard),
+                        shape = RoundedCornerShape(16.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.MenuBook,
-                            contentDescription = null,
-                            tint = ElectricCyan,
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = if (isReadingActive) (if (isHindi) "रोकें" else "Stop") else (if (isHindi) "पढ़ें" else "Read"),
-                            color = TextPrimary,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1
-                        )
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = DangerRed,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "SOS",
+                                color = DangerRed,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
+                            )
+                        }
                     }
-                }
 
-                // New "What's ahead?" / "सामने क्या है?" Button (min 72dp)
-                Button(
-                    onClick = onCloudDescribeClicked,
-                    contentPadding = PaddingValues(0.dp),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(72.dp)
-                        .semantics {
-                            contentDescription = if (isHindi) "सामने क्या है?" else "What's ahead?"
-                        },
-                    colors = ButtonDefaults.buttonColors(containerColor = DarkCard),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
+                    Button(
+                        onClick = onOpenSettings,
+                        contentPadding = PaddingValues(0.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(72.dp)
+                            .semantics {
+                                contentDescription = "Open Settings button"
+                            },
+                        colors = ButtonDefaults.buttonColors(containerColor = DarkCard),
+                        shape = RoundedCornerShape(16.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.RemoveRedEye,
-                            contentDescription = null,
-                            tint = ElectricCyan,
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = if (isHindi) "विवरण" else "Ahead",
-                            color = TextPrimary,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1
-                        )
-                    }
-                }
-
-                Button(
-                    onClick = onSosTap,
-                    contentPadding = PaddingValues(0.dp),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(72.dp)
-                        .combinedClickable(
-                            onClick = onSosTap,
-                            onLongClick = onSosLongPress
-                        )
-                        .semantics {
-                            contentDescription = if (isHindi) "आपातकालीन एसओएस बटन। टैप करने पर निर्देश मिलेगा, दबाकर रखने पर एसओएस भेजा जाएगा।" else "SOS emergency assistance button. Tap for instructions, long press to send SOS."
-                        },
-                    colors = ButtonDefaults.buttonColors(containerColor = DarkCard),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Warning,
-                            contentDescription = null,
-                            tint = DangerRed,
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "SOS",
-                            color = DangerRed,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1
-                        )
-                    }
-                }
-
-                Button(
-                    onClick = onOpenSettings,
-                    contentPadding = PaddingValues(0.dp),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(72.dp)
-                        .semantics {
-                            contentDescription = "Open Settings button"
-                        },
-                    colors = ButtonDefaults.buttonColors(containerColor = DarkCard),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Settings,
-                            contentDescription = null,
-                            tint = ElectricCyan,
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "SET",
-                            color = TextPrimary,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1
-                        )
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Settings,
+                                contentDescription = null,
+                                tint = ElectricCyan,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "SET",
+                                color = TextPrimary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
+                            )
+                        }
                     }
                 }
             }

@@ -4,19 +4,26 @@ import android.util.Log
 import com.example.netraai.detection.AlertPriority
 import com.example.netraai.detection.CorridorFilter
 import com.example.netraai.detection.CrowdDetector
+import com.example.netraai.detection.DetectionProfile
+import com.example.netraai.detection.DetectionProfileValues
 import com.example.netraai.detection.DetectedObstacle
 import com.example.netraai.detection.Distance
+import com.example.netraai.detection.GateStatus
+import com.example.netraai.detection.PathGuidance
 import com.example.netraai.voice.TtsManager
 
 /**
  * AlertEngine manages obstacle prioritization, speech queueing/interruptions,
- * corridor filtering, crowd mode detection, global rate limiting, and "why silent" diagnostics.
+ * corridor filtering, crowd mode detection, global rate limiting, path guidance, and "why silent" diagnostics.
  */
 class AlertEngine(
     private val speakAction: (text: String, interrupt: Boolean) -> Unit,
     private val isTtsSpeaking: () -> Boolean,
     val cooldownTracker: AlertCooldownTracker = AlertCooldownTracker(),
     val crowdDetector: CrowdDetector = CrowdDetector(),
+    val pathGuidance: PathGuidance = PathGuidance(),
+    var detectionProfile: DetectionProfile = DetectionProfile.BALANCED,
+    var allObjectsMode: Boolean = false,
     var onWhyLogged: ((String) -> Unit)? = null
 ) {
     private var lastCrowdSpokenTimeMs: Long = 0L
@@ -24,24 +31,35 @@ class AlertEngine(
     constructor(
         ttsManager: TtsManager,
         cooldownTracker: AlertCooldownTracker = AlertCooldownTracker(),
-        crowdDetector: CrowdDetector = CrowdDetector()
+        crowdDetector: CrowdDetector = CrowdDetector(),
+        pathGuidance: PathGuidance = PathGuidance()
     ) : this(
         speakAction = { text, interrupt -> ttsManager.speak(text, interrupt) },
         isTtsSpeaking = { ttsManager.isSpeaking },
         cooldownTracker = cooldownTracker,
-        crowdDetector = crowdDetector
+        crowdDetector = crowdDetector,
+        pathGuidance = pathGuidance
     )
 
     fun processObstacles(
         obstacles: List<DetectedObstacle>,
         language: String,
+        gateStatus: GateStatus = GateStatus.ACTIVE,
         currentTimeMs: Long = System.currentTimeMillis()
     ): DetectedObstacle? {
+        val guidanceSentence = pathGuidance.evaluateGuidanceSentence(obstacles, gateStatus, language, currentTimeMs)
+        if (guidanceSentence != null) {
+            val isUrgent = guidanceSentence.contains("Stop") || guidanceSentence.contains("रुकें")
+            speakAction(guidanceSentence, isUrgent)
+        }
+
         if (obstacles.isEmpty()) return null
+
+        val profileValues = DetectionProfileValues.forProfile(detectionProfile)
 
         // 1. Filter by corridor and distance
         for (obstacle in obstacles) {
-            if (!CorridorFilter.isInCorridor(obstacle.normalizedCenterX)) {
+            if (!CorridorFilter.isInCorridor(obstacle.normalizedCenterX, profileValues.corridorLeft, profileValues.corridorRight)) {
                 try {
                     Log.d("NetraWhy", "Dropped: label=${obstacle.label}, reason=OUTSIDE_CORRIDOR")
                 } catch (_: Exception) {}
@@ -54,18 +72,26 @@ class AlertEngine(
             }
         }
 
-        val corridorObstacles = obstacles.filter { CorridorFilter.isValidForAlert(it) }
+        val corridorObstacles = obstacles.filter { CorridorFilter.isValidForAlert(it, profileValues.corridorLeft, profileValues.corridorRight) }
         if (corridorObstacles.isEmpty()) return null
 
         // 2. Evaluate Crowd Mode
-        val (isCrowd, newCrowdTime) = crowdDetector.evaluate(corridorObstacles, currentTimeMs, lastCrowdSpokenTimeMs)
+        val (isCrowd, newCrowdTime) = if (!allObjectsMode) {
+            crowdDetector.evaluate(corridorObstacles, currentTimeMs, lastCrowdSpokenTimeMs)
+        } else {
+            Pair(false, lastCrowdSpokenTimeMs)
+        }
+
         if (isCrowd && newCrowdTime != lastCrowdSpokenTimeMs) {
             lastCrowdSpokenTimeMs = newCrowdTime
             val crowdMsg = AlertStrings.getCrowdMessage(language)
             speakAction(crowdMsg, false)
         }
 
-        val effectiveObstacles = if (isCrowd) {
+        val effectiveObstacles = if (allObjectsMode) {
+            val closest = corridorObstacles.minByOrNull { it.distanceMeters ?: 100f }
+            if (closest != null) listOf(closest) else emptyList()
+        } else if (isCrowd) {
             val nonPeople = corridorObstacles.filter { !it.label.equals("person", ignoreCase = true) }
             val people = corridorObstacles.filter { it.label.equals("person", ignoreCase = true) }
             for (p in people) {
@@ -159,6 +185,7 @@ class AlertEngine(
     fun reset() {
         cooldownTracker.reset()
         crowdDetector.reset()
+        pathGuidance.reset()
         lastCrowdSpokenTimeMs = 0L
     }
 }

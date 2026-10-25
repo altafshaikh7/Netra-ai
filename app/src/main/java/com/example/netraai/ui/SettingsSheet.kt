@@ -1,5 +1,6 @@
 package com.example.netraai.ui
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -36,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -76,6 +78,7 @@ fun SettingsSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val isHindi = language.equals("hi", ignoreCase = true)
+    val context = LocalContext.current
 
     var contactName by remember { mutableStateOf(emergencyContactName) }
     var contactNumber by remember { mutableStateOf(emergencyContactNumber) }
@@ -307,7 +310,7 @@ fun SettingsSheet(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // 5. Emergency Contact Fields (Name & Number)
+            // 5. Emergency Contact Fields & Explicit Save Button (min 56dp)
             Text(
                 text = if (isHindi) "आपातकालीन संपर्क (Emergency Contact)" else "Emergency Contact",
                 color = TextSecondary,
@@ -317,10 +320,7 @@ fun SettingsSheet(
             Spacer(modifier = Modifier.height(8.dp))
             OutlinedTextField(
                 value = contactName,
-                onValueChange = {
-                    contactName = it
-                    onSaveEmergencyContact(contactName, contactNumber)
-                },
+                onValueChange = { contactName = it },
                 label = { Text(if (isHindi) "नाम" else "Contact Name") },
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = ElectricCyan,
@@ -339,10 +339,7 @@ fun SettingsSheet(
             Spacer(modifier = Modifier.height(8.dp))
             OutlinedTextField(
                 value = contactNumber,
-                onValueChange = {
-                    contactNumber = it
-                    onSaveEmergencyContact(contactName, contactNumber)
-                },
+                onValueChange = { contactNumber = it },
                 label = { Text(if (isHindi) "फ़ोन नंबर" else "Phone Number") },
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = ElectricCyan,
@@ -358,6 +355,35 @@ fun SettingsSheet(
                         contentDescription = "Emergency contact phone number input"
                     }
             )
+            Spacer(modifier = Modifier.height(12.dp))
+            Button(
+                onClick = {
+                    val cleaned = contactNumber.trim()
+                    val isValid = cleaned.matches(Regex("^\\+?[0-9]{10,15}$"))
+                    if (isValid) {
+                        onSaveEmergencyContact(contactName, contactNumber)
+                        val msg = if (isHindi) "संपर्क सहेजा गया" else "Contact saved"
+                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                    } else {
+                        val errMsg = if (isHindi) "अमान्य फोन नंबर (10-15 अंक आवश्यक)" else "Invalid phone number (10-15 digits required)"
+                        Toast.makeText(context, errMsg, Toast.LENGTH_SHORT).show()
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+                    .semantics {
+                        contentDescription = if (isHindi) "आपातकालीन संपर्क सहेजें" else "Save emergency contact"
+                    }
+            ) {
+                Text(
+                    text = if (isHindi) "संपर्क सहेजें" else "Save Emergency Contact",
+                    color = Color.Black,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
 
             Spacer(modifier = Modifier.height(24.dp))
 

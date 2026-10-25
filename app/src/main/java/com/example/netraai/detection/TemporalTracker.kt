@@ -16,8 +16,8 @@ import kotlin.math.min
  * @param minIoU Minimum bounding box IoU required for position consistency (default: 0.30f).
  */
 class TemporalTracker(
-    val windowSize: Int = DEFAULT_WINDOW_SIZE,
-    val minConfirmations: Int = DEFAULT_MIN_CONFIRMATIONS,
+    var windowSize: Int = DEFAULT_WINDOW_SIZE,
+    var minConfirmations: Int = DEFAULT_MIN_CONFIRMATIONS,
     val positionTolerance: Float = DEFAULT_POSITION_TOLERANCE,
     val minIoU: Float = DEFAULT_MIN_IOU
 ) {

@@ -22,7 +22,7 @@ android {
     defaultConfig {
         applicationId = "com.example.netraai"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 37
         versionCode = 1
         versionName = "1.0"
 
@@ -33,6 +33,10 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            optimization {
+                enable = true
+                packageScope = setOf("androidx.**", "kotlin.**", "kotlinx.**")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -46,7 +50,6 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
-        mlModelBinding = true
     }
     androidResources {
         noCompress += "tflite"
